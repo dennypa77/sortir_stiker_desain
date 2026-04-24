@@ -1,0 +1,7 @@
+customtkinter
+gspread
+google-auth
+PyPDF2
+openpyxl
+gTTS
+pygame
