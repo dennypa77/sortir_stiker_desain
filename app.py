@@ -27,7 +27,7 @@ CONFIG_FILE = "config.json"
 class BotApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Bot Sortir Stiker & Gudang v2.0")
+        self.title("Bot Sortir Stiker & Gudang v2.1")
         self.geometry("850x700")
         
         self.config_data = self.load_config()
