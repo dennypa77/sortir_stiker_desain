@@ -214,6 +214,36 @@ class BotApp(ctk.CTk):
 
     # --- TAB 3: Eksekusi & Log ---
     def setup_tab_eksekusi(self):
+        # === Opsi Pra-Eksekusi (di atas tombol MULAI) ===
+        self.opt_frame = ctk.CTkFrame(self.tab3, fg_color="#1f2937", border_width=1, border_color="#3b82f6")
+        self.opt_frame.pack(fill="x", padx=20, pady=(15, 5))
+
+        ctk.CTkLabel(
+            self.opt_frame,
+            text="Opsi Pra-Eksekusi",
+            font=("Segoe UI", 13, "bold"),
+            text_color="#60a5fa"
+        ).pack(anchor="w", padx=12, pady=(8, 2))
+
+        self.var_auto_log_keluar = ctk.BooleanVar(value=self.config_data.get("auto_log_keluar", True))
+        self.chk_auto_log = ctk.CTkCheckBox(
+            self.opt_frame,
+            text="Tulis otomatis ke LOG_KELUAR & kurangi stok gudang saat tersedia",
+            variable=self.var_auto_log_keluar,
+            command=self.on_toggle_auto_log,
+            font=("Segoe UI", 12)
+        )
+        self.chk_auto_log.pack(anchor="w", padx=15, pady=(2, 4))
+
+        self.lbl_opt_hint = ctk.CTkLabel(
+            self.opt_frame,
+            text="",
+            font=("Segoe UI", 10, "italic"),
+            text_color="#9ca3af"
+        )
+        self.lbl_opt_hint.pack(anchor="w", padx=15, pady=(0, 8))
+        self._refresh_opt_hint()
+
         self.btn_frame = ctk.CTkFrame(self.tab3, fg_color="transparent")
         self.btn_frame.pack(pady=10)
 
@@ -252,6 +282,23 @@ class BotApp(ctk.CTk):
         # Log Textbox Khusus Daftar Gudang
         self.textbox_gudang = ctk.CTkTextbox(self.sub_tab_gudang, state="disabled", text_color="#28a745")
         self.textbox_gudang.pack(fill="both", expand=True, padx=5, pady=5)
+
+    def _refresh_opt_hint(self):
+        if self.var_auto_log_keluar.get():
+            self.lbl_opt_hint.configure(
+                text="Mode AKTIF: stok yang terpenuhi gudang akan dicatat ke sheet LOG_KELUAR (stok berkurang otomatis).",
+                text_color="#86efac"
+            )
+        else:
+            self.lbl_opt_hint.configure(
+                text="Mode NONAKTIF: tidak menulis ke LOG_KELUAR. Stok gudang HARUS dipotong manual oleh operator.",
+                text_color="#fbbf24"
+            )
+
+    def on_toggle_auto_log(self):
+        self.config_data["auto_log_keluar"] = bool(self.var_auto_log_keluar.get())
+        self.save_config()
+        self._refresh_opt_hint()
 
     def log_gui(self, message, color_tag="info"):
         self.textbox.configure(state="normal")
@@ -579,6 +626,11 @@ class BotApp(ctk.CTk):
         success_logs = []
         warnings_log = []
         logs_keluar_to_append = []
+        auto_log_keluar = bool(self.config_data.get("auto_log_keluar", True))
+        if auto_log_keluar:
+            self.log_gui("[OPSI] LOG_KELUAR: AKTIF - stok gudang akan dikurangi otomatis.", "info")
+        else:
+            self.log_gui("[OPSI] LOG_KELUAR: NONAKTIF - stok TIDAK ditulis ke sheet, potong manual.", "kuning")
 
         total_tasks = len(task_list)
         today_str = datetime.now().strftime("%Y-%m-%d")
@@ -613,12 +665,17 @@ class BotApp(ctk.CTk):
                 ambil_terpenuhi = total_pcs_needed
                 sisa_produksi = 0
                 stock_dict[numeric_id] -= ambil_terpenuhi
-                
-                logs_keluar_to_append.append([today_str, numeric_id, ambil_terpenuhi, f"Resi: {resi_val} | Full"])
+
+                if auto_log_keluar:
+                    logs_keluar_to_append.append([today_str, numeric_id, ambil_terpenuhi, f"Resi: {resi_val} | Full"])
+                    ket_sukses = f"Tersedia dari gudang ({ambil_terpenuhi})"
+                else:
+                    ket_sukses = f"Tersedia dari gudang ({ambil_terpenuhi}) - LOG_KELUAR dilewati (manual)"
+
                 self.log_gui(f"● Resi {resi_val} (SKU {numeric_id}): {total_pcs_needed} pcs", "hijau")
-                
+
                 self.log_gudang_ready(f"GUDANG - Resi: {resi_val} | SKU: {numeric_id} | Jumlah: {ambil_terpenuhi} pcs")
-                success_logs.append((f"Tugas-{(i+1):03d}", numeric_id, total_pcs_needed, f"Tersedia dari gudang ({ambil_terpenuhi})"))
+                success_logs.append((f"Tugas-{(i+1):03d}", numeric_id, total_pcs_needed, ket_sukses))
                 
             else:
                 sisa_produksi = total_pcs_needed
@@ -683,9 +740,11 @@ class BotApp(ctk.CTk):
                     self.log_gui(f"❌ Error ekstrak SKU {numeric_id}: {e}", "merah")
 
         # PUSH SHEETS
-        if logs_keluar_to_append:
+        if logs_keluar_to_append and auto_log_keluar:
             self.log_gui(f"\n[INFO] Mengirim data stok keluar ke LOG_KELUAR...", "info")
             ws_log.append_rows(logs_keluar_to_append)
+        elif not auto_log_keluar:
+            self.log_gui(f"\n[INFO] LOG_KELUAR DILEWATI sesuai opsi pra-eksekusi (mode manual).", "kuning")
 
         # WRITE LOG EXCEL LOCAL
         timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
