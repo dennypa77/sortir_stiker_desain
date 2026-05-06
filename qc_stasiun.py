@@ -659,23 +659,47 @@ class QcStasiunWindow(ctk.CTkToplevel):
             pass
 
     def _run_async(self, fn, on_done=None, on_error=None):
-        """Run blocking task di thread, callback di main thread via .after()."""
+        """Run blocking task di thread, callback di main thread via polling.
+        Worker thread TIDAK boleh panggil method tkinter (`self.after`, dll) —
+        Python 3.13 strict thread-safety. Pakai shared state + polling dari
+        main thread.
+        """
+        state = {"done": False, "result": None, "error": None}
+
         def worker():
             try:
-                result = fn()
-                if on_done:
-                    self.after(0, lambda: on_done(result))
+                state["result"] = fn()
             except Exception as e:
-                err = e
-                if on_error:
-                    self.after(0, lambda: on_error(err))
-                else:
-                    self.after(
-                        0,
-                        lambda: messagebox.showerror("Error", str(err)),
-                    )
+                state["error"] = e
+            finally:
+                state["done"] = True
 
         threading.Thread(target=worker, daemon=True).start()
+
+        def poll():
+            # Window mungkin sudah dihapus saat poll firing — guard dulu
+            try:
+                if not self.winfo_exists():
+                    return
+            except Exception:
+                return
+            if not state["done"]:
+                self.after(80, poll)
+                return
+            try:
+                if state["error"] is not None:
+                    if on_error:
+                        on_error(state["error"])
+                    else:
+                        messagebox.showerror("Error", str(state["error"]))
+                else:
+                    if on_done:
+                        on_done(state["result"])
+            except Exception as cb_err:
+                # Callback error — log only, jangan crash window
+                print(f"[QC async callback error] {cb_err}")
+
+        self.after(80, poll)
 
     # ---- layout skeleton ----
     def _build_layout(self):
