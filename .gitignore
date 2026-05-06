@@ -3,3 +3,6 @@ hasil/
 *.json
 ~$*.xlsx
 data.xlsx
+qc_data.db
+test_qc_data.db
+*.db-journal

@@ -6,7 +6,9 @@ import time
 FILES_TO_UPDATE = [
     "app.py",
     "duplicate_files.py",
-    "requirements.txt"
+    "requirements.txt",
+    "qc_stasiun.py",
+    "qc_seed.py"
 ]
 
 BASE_URL = "https://raw.githubusercontent.com/dennypa77/sortir_stiker_desain/main/"
