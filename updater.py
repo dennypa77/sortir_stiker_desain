@@ -8,7 +8,8 @@ FILES_TO_UPDATE = [
     "duplicate_files.py",
     "requirements.txt",
     "qc_stasiun.py",
-    "qc_seed.py"
+    "qc_seed.py",
+    "run_qc.py"
 ]
 
 BASE_URL = "https://raw.githubusercontent.com/dennypa77/sortir_stiker_desain/main/"
