@@ -15,6 +15,7 @@ State QC + audit trail: SQLite lokal di hasil/qc_data.db.
 import os
 import re
 import json
+import shutil
 import sqlite3
 import hashlib
 import threading
@@ -128,9 +129,89 @@ def get_db():
     return conn
 
 
+def _maybe_migrate_legacy_schema():
+    """Auto-migrate qc_sessions in-place kalau punya operator_id NOT NULL (skema lama).
+    Pakai rebuild table via SQL (tidak hapus file) supaya robust di Windows.
+    Tetap buat file backup di .bak_<timestamp> sebagai safety.
+    """
+    if not os.path.exists(DB_FILE):
+        return
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cols = conn.execute("PRAGMA table_info(qc_sessions)").fetchall()
+        # PRAGMA table_info: (cid, name, type, notnull, dflt_value, pk)
+        needs_migrate = any(
+            c[1] == "operator_id" and c[3] == 1 for c in cols
+        )
+        if not needs_migrate:
+            return
+
+        # Buat backup file dulu (safety net)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup = f"{DB_FILE}.bak_{ts}"
+        try:
+            bak_conn = sqlite3.connect(backup)
+            conn.backup(bak_conn)
+            bak_conn.close()
+        except Exception as e:
+            print(f"[QC DB] Backup gagal ({e}), tetap lanjut migrasi.")
+
+        # In-place rebuild qc_sessions tanpa NOT NULL di operator_id
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute(
+            """
+            CREATE TABLE qc_sessions_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                resi_code TEXT NOT NULL,
+                operator_id INTEGER,
+                batch_id TEXT,
+                marketplace TEXT,
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP,
+                status TEXT DEFAULT 'in_progress',
+                reject_reason TEXT,
+                reject_notes TEXT,
+                FOREIGN KEY (operator_id) REFERENCES qc_operators(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO qc_sessions_new
+              SELECT id, resi_code, operator_id, batch_id, marketplace,
+                     started_at, completed_at, status, reject_reason, reject_notes
+              FROM qc_sessions
+            """
+        )
+        conn.execute("DROP TABLE qc_sessions")
+        conn.execute("ALTER TABLE qc_sessions_new RENAME TO qc_sessions")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_qc_sessions_resi ON qc_sessions(resi_code)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_qc_sessions_status ON qc_sessions(status)"
+        )
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.commit()
+        print(
+            f"[QC DB] Schema lama (operator_id NOT NULL) ter-migrate.\n"
+            f"        Backup: {backup}"
+        )
+    except Exception as e:
+        print(f"[QC DB] Migration error: {e}")
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def init_db():
-    """Idempotent — buat tabel kalau belum ada."""
+    """Idempotent — buat tabel kalau belum ada. Auto-migrate kalau schema lama."""
     _ensure_db_dir()
+    _maybe_migrate_legacy_schema()
     with get_db() as conn:
         conn.executescript(
             """
@@ -146,7 +227,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS qc_sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 resi_code TEXT NOT NULL,
-                operator_id INTEGER NOT NULL,
+                operator_id INTEGER,
                 batch_id TEXT,
                 marketplace TEXT,
                 started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -512,7 +593,14 @@ class QcStasiunWindow(ctk.CTkToplevel):
         self.spreadsheet = spreadsheet
         self.adapter = SheetAdapter(spreadsheet)
 
-        self.current_operator = None  # dict from qc_operators
+        # Stub operator: pakai nama workstation supaya audit trail tetap ada
+        # tanpa minta login. Ganti via os env atau hardcode kalau perlu.
+        qc_name = (
+            os.environ.get("COMPUTERNAME")
+            or os.environ.get("USERNAME")
+            or "QC"
+        )
+        self.current_operator = {"id": None, "name": qc_name}
         self.current_session_id = None
         self.current_resi_code = None
         self.current_resi_data = None  # cached data dari adapter
@@ -539,7 +627,8 @@ class QcStasiunWindow(ctk.CTkToplevel):
             pass
 
         self._build_layout()
-        self._show_login()
+        # Pre-fetch sheet data lalu langsung tampilkan idle (no login)
+        self._refresh_sheet_data(silent=True, then=self._show_idle)
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -606,23 +695,6 @@ class QcStasiunWindow(ctk.CTkToplevel):
         self.header_right = ctk.CTkFrame(self.header, fg_color="transparent")
         self.header_right.pack(side="right", padx=20)
 
-        self.lbl_operator = ctk.CTkLabel(
-            self.header_right, text="", font=("Segoe UI", 13, "bold")
-        )
-        self.lbl_operator.pack(side="right", padx=(10, 0))
-
-        self.btn_change_op = ctk.CTkButton(
-            self.header_right,
-            text="Ganti Operator",
-            width=130,
-            height=32,
-            fg_color=COLOR_GREY_BTN,
-            hover_color=COLOR_GREY_BTN_HOVER,
-            command=self._show_login,
-        )
-        self.btn_change_op.pack(side="right", padx=5)
-        self.btn_change_op.configure(state="disabled")
-
         self.btn_refresh = ctk.CTkButton(
             self.header_right,
             text="Refresh Data",
@@ -678,89 +750,13 @@ class QcStasiunWindow(ctk.CTkToplevel):
         except Exception as e:
             self.lbl_stats.configure(text=f"Stats error: {e}")
 
-    # ---- LOGIN STATE ----
-    def _show_login(self):
-        self.current_operator = None
-        self.current_session_id = None
-        self.current_resi_code = None
-        self.current_resi_data = None
-        self.current_progress = []
-        self.btn_change_op.configure(state="disabled")
-        self.lbl_operator.configure(text="")
-
-        self._clear_body()
-
-        center = ctk.CTkFrame(self.body, fg_color="transparent")
-        center.place(relx=0.5, rely=0.5, anchor="center")
-
-        ctk.CTkLabel(
-            center,
-            text="Pilih Operator QC",
-            font=("Segoe UI", 22, "bold"),
-        ).pack(pady=(0, 20))
-
-        operators = list_operators(active_only=True)
-        if not operators:
-            ctk.CTkLabel(
-                center,
-                text=(
-                    "Belum ada operator terdaftar.\n\n"
-                    "Jalankan dari command line:\n"
-                    "  python qc_seed.py add-operator --name \"Nama\"\n"
-                    "  python qc_seed.py add-operator --name \"Supervisor\" --supervisor --pin 1234"
-                ),
-                font=("Segoe UI", 13),
-                text_color=COLOR_KUNING,
-                justify="left",
-            ).pack(pady=10)
-            return
-
-        names = [op["name"] + (" (Supervisor)" if op["is_supervisor"] else "") for op in operators]
-        self._operators_lookup = {name: op for name, op in zip(names, operators)}
-        self._login_var = ctk.StringVar(value=names[0])
-        dropdown = ctk.CTkOptionMenu(
-            center,
-            variable=self._login_var,
-            values=names,
-            width=320,
-            height=44,
-            font=("Segoe UI", 14),
-            dropdown_font=("Segoe UI", 13),
-        )
-        dropdown.pack(pady=10)
-
-        ctk.CTkButton(
-            center,
-            text="Mulai Bertugas",
-            width=320,
-            height=48,
-            font=("Segoe UI", 15, "bold"),
-            fg_color=COLOR_HIJAU,
-            hover_color="#1e7e34",
-            command=self._on_login_submit,
-        ).pack(pady=(15, 0))
-
-    def _on_login_submit(self):
-        name = self._login_var.get()
-        op = self._operators_lookup.get(name)
-        if not op:
-            return
-        self.current_operator = op
-        self.lbl_operator.configure(
-            text=f"Operator: {op['name']}"
-            + (" • SUPERVISOR" if op["is_supervisor"] else "")
-        )
-        self.btn_change_op.configure(state="normal")
-        log_event(None, op["id"], "operator_login", {"name": op["name"]})
-        # Pre-fetch sheet data
-        self._refresh_sheet_data(silent=True, then=self._show_idle)
-
     # ---- IDLE STATE ----
     def _show_idle(self):
         self.current_session_id = None
         self.current_resi_code = None
         self.current_resi_data = None
         self.current_progress = []
+        # current_operator (stub workstation name) tetap dipertahankan
 
         self._clear_body()
 
@@ -1260,26 +1256,12 @@ class QcStasiunWindow(ctk.CTkToplevel):
     def _on_manual_entry(self):
         ManualEntryDialog(self, self._handle_manual_entry)
 
-    def _handle_manual_entry(self, sku_value, pin):
-        supervisor = verify_supervisor_pin(pin)
-        if not supervisor:
-            messagebox.showerror(
-                "PIN Salah",
-                "PIN supervisor tidak valid atau bukan dari supervisor aktif.",
-                parent=self,
-            )
-            log_event(
-                self.current_session_id,
-                self.current_operator["id"],
-                "manual_entry_pin_invalid",
-                {"attempted_sku": sku_value},
-            )
-            return
+    def _handle_manual_entry(self, sku_value):
         log_event(
             self.current_session_id,
             self.current_operator["id"],
-            "manual_entry_authorized",
-            {"sku": sku_value, "supervisor": supervisor},
+            "manual_entry",
+            {"sku": sku_value},
         )
         self._process_scan(sku_value, source="manual_entry")
 
@@ -1504,7 +1486,7 @@ class ManualEntryDialog(ctk.CTkToplevel):
         super().__init__(parent)
         self.on_submit = on_submit
         self.title("Manual Entry")
-        self.geometry("420x260")
+        self.geometry("420x220")
         self.resizable(False, False)
         try:
             self.transient(parent)
@@ -1519,7 +1501,7 @@ class ManualEntryDialog(ctk.CTkToplevel):
         ).pack(pady=(15, 5))
         ctk.CTkLabel(
             self,
-            text="Butuh PIN Supervisor untuk autorisasi.",
+            text="Ketik SKU / ID Desain secara manual.",
             font=("Segoe UI", 11),
             text_color=COLOR_INFO,
         ).pack(pady=(0, 15))
@@ -1527,16 +1509,8 @@ class ManualEntryDialog(ctk.CTkToplevel):
         ctk.CTkLabel(
             self, text="SKU / ID Desain:", font=("Segoe UI", 12)
         ).pack(anchor="w", padx=20)
-        self.entry_sku = ctk.CTkEntry(self, height=34, font=("Segoe UI", 13))
+        self.entry_sku = ctk.CTkEntry(self, height=38, font=("Segoe UI", 14))
         self.entry_sku.pack(fill="x", padx=20, pady=4)
-
-        ctk.CTkLabel(self, text="PIN Supervisor:", font=("Segoe UI", 12)).pack(
-            anchor="w", padx=20, pady=(10, 0)
-        )
-        self.entry_pin = ctk.CTkEntry(
-            self, show="•", height=34, font=("Segoe UI", 13)
-        )
-        self.entry_pin.pack(fill="x", padx=20, pady=4)
 
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(pady=15)
@@ -1550,10 +1524,10 @@ class ManualEntryDialog(ctk.CTkToplevel):
         ).pack(side="left", padx=5)
         ctk.CTkButton(
             btn_frame,
-            text="Verifikasi & Submit",
+            text="Submit",
             fg_color=COLOR_HIJAU,
             hover_color="#1e7e34",
-            width=180,
+            width=160,
             command=self._submit,
         ).pack(side="left", padx=5)
 
@@ -1562,11 +1536,10 @@ class ManualEntryDialog(ctk.CTkToplevel):
 
     def _submit(self):
         sku = self.entry_sku.get().strip()
-        pin = self.entry_pin.get().strip()
-        if not sku or not pin:
+        if not sku:
             messagebox.showwarning(
-                "Input Kurang", "SKU dan PIN harus diisi.", parent=self
+                "Input Kurang", "SKU harus diisi.", parent=self
             )
             return
         self.destroy()
-        self.on_submit(sku, pin)
+        self.on_submit(sku)
