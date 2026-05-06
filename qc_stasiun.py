@@ -986,14 +986,13 @@ class QcStasiunWindow(ctk.CTkToplevel):
             info, text=meta_text, font=("Segoe UI", 12), text_color=COLOR_INFO
         ).pack(side="right", padx=20)
 
-        # Middle: split (left checklist fixed-width, right scan + buttons fills rest)
+        # Middle: split (left checklist EXPAND wide, right scan + buttons fixed narrow)
         middle = ctk.CTkFrame(self.body, fg_color="transparent")
         middle.pack(fill="both", expand=True)
 
-        # Left — checklist (fixed width supaya tidak bloated)
-        left = ctk.CTkFrame(middle, fg_color="transparent", width=460)
-        left.pack(side="left", fill="y", padx=(0, 12))
-        left.pack_propagate(False)
+        # Left — checklist (expand penuh, banyak space untuk daftar item)
+        left = ctk.CTkFrame(middle, fg_color="transparent")
+        left.pack(side="left", fill="both", expand=True, padx=(0, 12))
 
         ctk.CTkLabel(
             left, text="Checklist Item Pesanan", font=("Segoe UI", 15, "bold")
@@ -1004,9 +1003,10 @@ class QcStasiunWindow(ctk.CTkToplevel):
         self.progress_widgets = {}
         self._render_checklist()
 
-        # Right — scan & buttons (expand untuk dapat sisa lebar)
-        right = ctk.CTkFrame(middle, fg_color="transparent")
-        right.pack(side="right", fill="both", expand=True)
+        # Right — scan & buttons (fixed narrow di kanan)
+        right = ctk.CTkFrame(middle, fg_color="transparent", width=360)
+        right.pack(side="right", fill="y")
+        right.pack_propagate(False)
 
         ctk.CTkLabel(
             right, text="Scan Pack Stiker", font=("Segoe UI", 14, "bold")
@@ -1057,7 +1057,7 @@ class QcStasiunWindow(ctk.CTkToplevel):
 
         self.btn_manual = ctk.CTkButton(
             right,
-            text="Manual Entry (PIN Supervisor)",
+            text="Manual Entry SKU",
             height=36,
             font=("Segoe UI", 11),
             fg_color=COLOR_KUNING,
@@ -1121,6 +1121,13 @@ class QcStasiunWindow(ctk.CTkToplevel):
             )
             detail_lbl.pack(fill="x", pady=(2, 0))
 
+            # Shortfall warning (bold merah) — di-show kalau scanned < target
+            shortfall_lbl = ctk.CTkLabel(
+                mid, text="", font=("Segoe UI", 15, "bold"), anchor="w",
+                text_color=COLOR_MERAH,
+            )
+            # Initial state: hidden (di-pack saat butuh via _refresh_progress_row)
+
             # Right side: tombol "Visual Confirm" hanya untuk non-stiker
             action_frame = ctk.CTkFrame(row, fg_color="transparent")
             action_frame.pack(side="right", padx=10, pady=10)
@@ -1146,6 +1153,7 @@ class QcStasiunWindow(ctk.CTkToplevel):
                 "sku_lbl": sku_lbl,
                 "status_text_lbl": status_text_lbl,
                 "detail_lbl": detail_lbl,
+                "shortfall_lbl": shortfall_lbl,
                 "confirm_btn": confirm_btn,
             }
             self._refresh_progress_row(p)
@@ -1155,7 +1163,21 @@ class QcStasiunWindow(ctk.CTkToplevel):
         if not widgets:
             return
 
+        # Helper: tampilkan/sembunyikan shortfall label
+        def show_shortfall(text):
+            sf = widgets["shortfall_lbl"]
+            sf.configure(text=text)
+            if not sf.winfo_ismapped():
+                sf.pack(fill="x", pady=(2, 0))
+
+        def hide_shortfall():
+            sf = widgets["shortfall_lbl"]
+            sf.configure(text="")
+            if sf.winfo_ismapped():
+                sf.pack_forget()
+
         if p["is_non_stiker"]:
+            hide_shortfall()
             if p["is_visual_confirmed"]:
                 widgets["status_lbl"].configure(text="✔", text_color=COLOR_HIJAU)
                 widgets["status_text_lbl"].configure(
@@ -1191,6 +1213,11 @@ class QcStasiunWindow(ctk.CTkToplevel):
                 text=f"Butuh {target} pack — scan 1x untuk verifikasi",
                 text_color=COLOR_INFO,
             )
+            # Tampilkan shortfall sebagai pengingat (semua N pack belum masuk)
+            if target > 1:
+                show_shortfall(f"⚠  KURANG {target} PACK")
+            else:
+                hide_shortfall()
         else:
             # Sudah minimal 1x scan = SKU SESUAI
             widgets["status_lbl"].configure(text="✔", text_color=COLOR_HIJAU)
@@ -1198,22 +1225,31 @@ class QcStasiunWindow(ctk.CTkToplevel):
                 text="✔ SKU SESUAI", text_color=COLOR_HIJAU
             )
             if target <= 1:
-                detail = f"Butuh 1 pack  •  scan: {scanned}x"
+                widgets["detail_lbl"].configure(
+                    text=f"Butuh 1 pack  •  scan: {scanned}x",
+                    text_color=COLOR_INFO,
+                )
+                hide_shortfall()
             elif scanned < target:
                 kurang = target - scanned
-                detail = (
-                    f"Butuh {target} pack  •  baru scan {scanned}x  "
-                    f"(kurang {kurang} dari hitungan scan)"
+                widgets["detail_lbl"].configure(
+                    text=f"Butuh {target} pack  •  baru scan {scanned}x",
+                    text_color=COLOR_INFO,
                 )
+                show_shortfall(f"⚠  KURANG {kurang} PACK")
             elif scanned == target:
-                detail = f"Butuh {target} pack  •  scan lengkap ({scanned}/{target})"
+                widgets["detail_lbl"].configure(
+                    text=f"Butuh {target} pack  •  scan lengkap ({scanned}/{target})",
+                    text_color=COLOR_HIJAU,
+                )
+                hide_shortfall()
             else:
                 lebih = scanned - target
-                detail = (
-                    f"Butuh {target} pack  •  scan {scanned}x "
-                    f"(kelebihan {lebih}x — OK)"
+                widgets["detail_lbl"].configure(
+                    text=f"Butuh {target} pack  •  scan {scanned}x (kelebihan {lebih}x — OK)",
+                    text_color=COLOR_INFO,
                 )
-            widgets["detail_lbl"].configure(text=detail, text_color=COLOR_INFO)
+                hide_shortfall()
 
     def _update_approve_button(self):
         if is_session_complete(self.current_session_id):
