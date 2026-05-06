@@ -1080,75 +1080,98 @@ class QcStasiunWindow(ctk.CTkToplevel):
 
         self._update_approve_button()
 
+    NUM_CHECKLIST_COLS = 3
+
     def _render_checklist(self):
         for w in self.checklist_frame.winfo_children():
             w.destroy()
         self.progress_widgets = {}
 
-        for p in self.current_progress:
-            row = ctk.CTkFrame(self.checklist_frame, fg_color="#1e293b", corner_radius=6)
-            row.pack(fill="x", pady=4, padx=2)
-
-            # Status icon (kiri, besar)
-            status_lbl = ctk.CTkLabel(
-                row, text="◯", font=("Segoe UI", 30, "bold"), width=46
+        # Configure 3-col grid dengan width seragam
+        for c in range(self.NUM_CHECKLIST_COLS):
+            self.checklist_frame.grid_columnconfigure(
+                c, weight=1, uniform="qc_cols"
             )
-            status_lbl.pack(side="left", padx=(10, 6), pady=10)
 
-            # Info middle: 3 baris (SKU bold, status, butuh+scan info)
-            mid = ctk.CTkFrame(row, fg_color="transparent")
-            mid.pack(side="left", fill="both", expand=True, padx=6, pady=10)
+        for idx, p in enumerate(self.current_progress):
+            col = idx % self.NUM_CHECKLIST_COLS
+            grow = idx // self.NUM_CHECKLIST_COLS
 
-            sku_text = (
+            card = ctk.CTkFrame(
+                self.checklist_frame, fg_color="#1e293b", corner_radius=6
+            )
+            card.grid(row=grow, column=col, padx=4, pady=4, sticky="nsew")
+
+            # Top row: status icon + ID/SKU pendek
+            top = ctk.CTkFrame(card, fg_color="transparent")
+            top.pack(fill="x", padx=10, pady=(8, 0))
+
+            status_lbl = ctk.CTkLabel(
+                top, text="◯", font=("Segoe UI", 22, "bold"), width=30
+            )
+            status_lbl.pack(side="left", padx=(0, 6))
+
+            id_text = (
                 p["bigseller_sku"]
                 if p["is_non_stiker"]
-                else f"{p['bigseller_sku']}  •  ID {p['design_sku']}"
+                else f"ID {p['design_sku']}"
             )
             sku_lbl = ctk.CTkLabel(
-                mid, text=sku_text, font=("Segoe UI", 16, "bold"), anchor="w"
+                top, text=id_text, font=("Segoe UI", 17, "bold"), anchor="w"
             )
-            sku_lbl.pack(fill="x")
+            sku_lbl.pack(side="left", fill="x", expand=True)
 
+            # SKU full kecil di bawah (skip untuk non-stiker, sudah di top)
+            if not p["is_non_stiker"]:
+                ctk.CTkLabel(
+                    card,
+                    text=p["bigseller_sku"],
+                    font=("Segoe UI", 10),
+                    anchor="w",
+                    text_color="#9ca3af",
+                ).pack(fill="x", padx=10, pady=(0, 4))
+
+            # Status text bold
             status_text_lbl = ctk.CTkLabel(
-                mid, text="", font=("Segoe UI", 15, "bold"), anchor="w",
+                card, text="", font=("Segoe UI", 13, "bold"), anchor="w",
                 text_color=COLOR_INFO,
             )
-            status_text_lbl.pack(fill="x", pady=(2, 0))
+            status_text_lbl.pack(fill="x", padx=10, pady=(2, 0))
 
+            # Detail line
             detail_lbl = ctk.CTkLabel(
-                mid, text="", font=("Segoe UI", 13), anchor="w",
+                card, text="", font=("Segoe UI", 11), anchor="w",
                 text_color=COLOR_INFO,
             )
-            detail_lbl.pack(fill="x", pady=(2, 0))
+            detail_lbl.pack(fill="x", padx=10, pady=(1, 0))
 
-            # Shortfall warning (bold merah) — di-show kalau scanned < target
+            # Shortfall warning (bold merah, conditional show)
             shortfall_lbl = ctk.CTkLabel(
-                mid, text="", font=("Segoe UI", 15, "bold"), anchor="w",
+                card, text="", font=("Segoe UI", 13, "bold"), anchor="w",
                 text_color=COLOR_MERAH,
             )
-            # Initial state: hidden (di-pack saat butuh via _refresh_progress_row)
+            # Tidak di-pack di sini — _refresh_progress_row yang handle
 
-            # Right side: tombol "Visual Confirm" hanya untuk non-stiker
-            action_frame = ctk.CTkFrame(row, fg_color="transparent")
-            action_frame.pack(side="right", padx=10, pady=10)
-
+            # Bottom: tombol Visual Confirm (hanya untuk non-stiker)
             confirm_btn = None
             if p["is_non_stiker"]:
                 confirm_btn = ctk.CTkButton(
-                    action_frame,
-                    text="Visual\nConfirm",
-                    width=90,
-                    height=58,
-                    font=("Segoe UI", 12, "bold"),
+                    card,
+                    text="Visual Confirm",
+                    height=30,
+                    font=("Segoe UI", 11, "bold"),
                     fg_color=COLOR_KUNING,
                     text_color="#000",
                     hover_color="#dba90c",
                     command=lambda pid=p["id"]: self._on_visual_confirm(pid),
                 )
-                confirm_btn.pack()
+                confirm_btn.pack(fill="x", padx=8, pady=(6, 8))
+            else:
+                # Spacer kecil supaya bottom card tidak terlalu mepet
+                ctk.CTkFrame(card, fg_color="transparent", height=6).pack()
 
             self.progress_widgets[p["id"]] = {
-                "row": row,
+                "row": card,
                 "status_lbl": status_lbl,
                 "sku_lbl": sku_lbl,
                 "status_text_lbl": status_text_lbl,
