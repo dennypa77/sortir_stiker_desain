@@ -392,6 +392,12 @@ def set_visual_confirm(progress_id, value=True):
 
 
 def is_session_complete(session_id):
+    """Sesi complete kalau:
+    - Semua item stiker sudah di-scan minimal 1x (verifikasi SKU sesuai).
+    - Semua item non-stiker sudah visual-confirmed.
+    Counter pack tidak di-enforce — packer trusted soal jumlah, scan cuma
+    verify SKU benar.
+    """
     progress = get_session_progress(session_id)
     if not progress:
         return False
@@ -400,7 +406,7 @@ def is_session_complete(session_id):
             if not p["is_visual_confirmed"]:
                 return False
         else:
-            if p["scanned_packs"] < p["target_packs"]:
+            if p["scanned_packs"] < 1:
                 return False
     return True
 
@@ -980,27 +986,27 @@ class QcStasiunWindow(ctk.CTkToplevel):
             info, text=meta_text, font=("Segoe UI", 12), text_color=COLOR_INFO
         ).pack(side="right", padx=20)
 
-        # Middle: split (left checklist, right scan + buttons)
+        # Middle: split (left checklist fixed-width, right scan + buttons fills rest)
         middle = ctk.CTkFrame(self.body, fg_color="transparent")
         middle.pack(fill="both", expand=True)
 
-        # Left — checklist
-        left = ctk.CTkFrame(middle, fg_color="transparent")
-        left.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        # Left — checklist (fixed width supaya tidak bloated)
+        left = ctk.CTkFrame(middle, fg_color="transparent", width=460)
+        left.pack(side="left", fill="y", padx=(0, 12))
+        left.pack_propagate(False)
 
         ctk.CTkLabel(
-            left, text="Checklist Item Pesanan", font=("Segoe UI", 14, "bold")
-        ).pack(anchor="w", pady=(0, 5))
+            left, text="Checklist Item Pesanan", font=("Segoe UI", 15, "bold")
+        ).pack(anchor="w", pady=(0, 6))
 
         self.checklist_frame = ctk.CTkScrollableFrame(left, fg_color="#0f172a")
         self.checklist_frame.pack(fill="both", expand=True)
-        self.progress_widgets = {}  # progress_id -> {row_frame, status_lbl, count_lbl}
+        self.progress_widgets = {}
         self._render_checklist()
 
-        # Right — scan & buttons
-        right = ctk.CTkFrame(middle, fg_color="transparent", width=380)
-        right.pack(side="right", fill="y")
-        right.pack_propagate(False)
+        # Right — scan & buttons (expand untuk dapat sisa lebar)
+        right = ctk.CTkFrame(middle, fg_color="transparent")
+        right.pack(side="right", fill="both", expand=True)
 
         ctk.CTkLabel(
             right, text="Scan Pack Stiker", font=("Segoe UI", 14, "bold")
@@ -1081,47 +1087,52 @@ class QcStasiunWindow(ctk.CTkToplevel):
 
         for p in self.current_progress:
             row = ctk.CTkFrame(self.checklist_frame, fg_color="#1e293b", corner_radius=6)
-            row.pack(fill="x", pady=3, padx=2)
+            row.pack(fill="x", pady=4, padx=2)
 
-            # Status icon kolom kiri
+            # Status icon (kiri, besar)
             status_lbl = ctk.CTkLabel(
-                row, text="◯", font=("Segoe UI", 18, "bold"), width=30
+                row, text="◯", font=("Segoe UI", 30, "bold"), width=46
             )
-            status_lbl.pack(side="left", padx=(8, 4), pady=8)
+            status_lbl.pack(side="left", padx=(10, 6), pady=10)
 
-            # Info middle (SKU + counter)
+            # Info middle: 3 baris (SKU bold, status, butuh+scan info)
             mid = ctk.CTkFrame(row, fg_color="transparent")
-            mid.pack(side="left", fill="both", expand=True, padx=4, pady=8)
+            mid.pack(side="left", fill="both", expand=True, padx=6, pady=10)
 
-            sku_label = (
+            sku_text = (
                 p["bigseller_sku"]
                 if p["is_non_stiker"]
-                else f"{p['bigseller_sku']}  (ID: {p['design_sku']})"
+                else f"{p['bigseller_sku']}  •  ID {p['design_sku']}"
             )
-            ctk.CTkLabel(
-                mid,
-                text=sku_label,
-                font=("Segoe UI", 13, "bold"),
-                anchor="w",
-            ).pack(fill="x")
-
-            count_lbl = ctk.CTkLabel(
-                mid, text="", font=("Segoe UI", 11), anchor="w", text_color=COLOR_INFO
+            sku_lbl = ctk.CTkLabel(
+                mid, text=sku_text, font=("Segoe UI", 16, "bold"), anchor="w"
             )
-            count_lbl.pack(fill="x")
+            sku_lbl.pack(fill="x")
 
-            # Right side: action button (visual confirm) for non-stiker
+            status_text_lbl = ctk.CTkLabel(
+                mid, text="", font=("Segoe UI", 15, "bold"), anchor="w",
+                text_color=COLOR_INFO,
+            )
+            status_text_lbl.pack(fill="x", pady=(2, 0))
+
+            detail_lbl = ctk.CTkLabel(
+                mid, text="", font=("Segoe UI", 13), anchor="w",
+                text_color=COLOR_INFO,
+            )
+            detail_lbl.pack(fill="x", pady=(2, 0))
+
+            # Right side: tombol "Visual Confirm" hanya untuk non-stiker
             action_frame = ctk.CTkFrame(row, fg_color="transparent")
-            action_frame.pack(side="right", padx=8, pady=8)
+            action_frame.pack(side="right", padx=10, pady=10)
 
             confirm_btn = None
             if p["is_non_stiker"]:
                 confirm_btn = ctk.CTkButton(
                     action_frame,
-                    text="Visual Confirm",
-                    width=130,
-                    height=32,
-                    font=("Segoe UI", 11),
+                    text="Visual\nConfirm",
+                    width=90,
+                    height=58,
+                    font=("Segoe UI", 12, "bold"),
                     fg_color=COLOR_KUNING,
                     text_color="#000",
                     hover_color="#dba90c",
@@ -1132,7 +1143,9 @@ class QcStasiunWindow(ctk.CTkToplevel):
             self.progress_widgets[p["id"]] = {
                 "row": row,
                 "status_lbl": status_lbl,
-                "count_lbl": count_lbl,
+                "sku_lbl": sku_lbl,
+                "status_text_lbl": status_text_lbl,
+                "detail_lbl": detail_lbl,
                 "confirm_btn": confirm_btn,
             }
             self._refresh_progress_row(p)
@@ -1141,35 +1154,66 @@ class QcStasiunWindow(ctk.CTkToplevel):
         widgets = self.progress_widgets.get(p["id"])
         if not widgets:
             return
+
         if p["is_non_stiker"]:
             if p["is_visual_confirmed"]:
                 widgets["status_lbl"].configure(text="✔", text_color=COLOR_HIJAU)
-                widgets["count_lbl"].configure(
-                    text="Non-stiker — sudah dikonfirmasi visual",
+                widgets["status_text_lbl"].configure(
+                    text="✔ SUDAH DIKONFIRMASI", text_color=COLOR_HIJAU
+                )
+                widgets["detail_lbl"].configure(
+                    text="Item non-stiker — visual confirm OK",
                     text_color=COLOR_HIJAU,
                 )
                 if widgets["confirm_btn"]:
                     widgets["confirm_btn"].configure(state="disabled")
             else:
                 widgets["status_lbl"].configure(text="□", text_color=COLOR_KUNING)
-                widgets["count_lbl"].configure(
-                    text="Non-stiker — perlu Visual Confirm", text_color=COLOR_KUNING
+                widgets["status_text_lbl"].configure(
+                    text="MENUNGGU KONFIRMASI", text_color=COLOR_KUNING
                 )
+                widgets["detail_lbl"].configure(
+                    text="Item non-stiker — klik Visual Confirm",
+                    text_color=COLOR_KUNING,
+                )
+            return
+
+        # Stiker (scan-based)
+        scanned = p["scanned_packs"]
+        target = p["target_packs"]
+
+        if scanned == 0:
+            widgets["status_lbl"].configure(text="◯", text_color=COLOR_INFO)
+            widgets["status_text_lbl"].configure(
+                text="BELUM DI-SCAN", text_color=COLOR_KUNING
+            )
+            widgets["detail_lbl"].configure(
+                text=f"Butuh {target} pack — scan 1x untuk verifikasi",
+                text_color=COLOR_INFO,
+            )
         else:
-            scanned = p["scanned_packs"]
-            target = p["target_packs"]
-            bar_full = "▣" * min(scanned, target)
-            bar_empty = "▢" * max(0, target - scanned)
-            count_text = f"{bar_full}{bar_empty}  {scanned}/{target} pack"
-            if scanned >= target:
-                widgets["status_lbl"].configure(text="✔", text_color=COLOR_HIJAU)
-                widgets["count_lbl"].configure(text=count_text, text_color=COLOR_HIJAU)
-            elif scanned > 0:
-                widgets["status_lbl"].configure(text="●", text_color=COLOR_CYAN)
-                widgets["count_lbl"].configure(text=count_text, text_color=COLOR_CYAN)
+            # Sudah minimal 1x scan = SKU SESUAI
+            widgets["status_lbl"].configure(text="✔", text_color=COLOR_HIJAU)
+            widgets["status_text_lbl"].configure(
+                text="✔ SKU SESUAI", text_color=COLOR_HIJAU
+            )
+            if target <= 1:
+                detail = f"Butuh 1 pack  •  scan: {scanned}x"
+            elif scanned < target:
+                kurang = target - scanned
+                detail = (
+                    f"Butuh {target} pack  •  baru scan {scanned}x  "
+                    f"(kurang {kurang} dari hitungan scan)"
+                )
+            elif scanned == target:
+                detail = f"Butuh {target} pack  •  scan lengkap ({scanned}/{target})"
             else:
-                widgets["status_lbl"].configure(text="◯", text_color=COLOR_INFO)
-                widgets["count_lbl"].configure(text=count_text, text_color=COLOR_INFO)
+                lebih = scanned - target
+                detail = (
+                    f"Butuh {target} pack  •  scan {scanned}x "
+                    f"(kelebihan {lebih}x — OK)"
+                )
+            widgets["detail_lbl"].configure(text=detail, text_color=COLOR_INFO)
 
     def _update_approve_button(self):
         if is_session_complete(self.current_session_id):
@@ -1195,48 +1239,54 @@ class QcStasiunWindow(ctk.CTkToplevel):
         for p in self.current_progress:
             if p["is_non_stiker"]:
                 continue
-            if p["scanned_packs"] >= p["target_packs"]:
-                continue
             if p["design_sku"] == target_id:
                 match_p = p
                 break
 
         if match_p:
+            was_first_scan = match_p["scanned_packs"] == 0
             increment_scan(match_p["id"])
             match_p["scanned_packs"] += 1
             self.beep_match()
-            self.lbl_last_scan.configure(
-                text=f"✔ MATCH: {target_id}  ({match_p['scanned_packs']}/{match_p['target_packs']})",
-                text_color=COLOR_HIJAU,
-            )
+            target = match_p["target_packs"]
+            scanned = match_p["scanned_packs"]
+            if was_first_scan:
+                if target <= 1:
+                    msg = f"✔ SKU {target_id} SESUAI"
+                else:
+                    msg = (
+                        f"✔ SKU {target_id} SESUAI  •  "
+                        f"pastikan {target} pack masuk polymailer"
+                    )
+            else:
+                msg = (
+                    f"✔ SKU {target_id} sudah verified  "
+                    f"(scan ke-{scanned})"
+                )
+            self.lbl_last_scan.configure(text=msg, text_color=COLOR_HIJAU)
             log_event(
                 self.current_session_id,
                 self.current_operator["id"],
                 "scan_match" if source == "scan" else f"{source}_match",
-                {"scanned": scanned_value, "design_sku": target_id},
+                {
+                    "scanned": scanned_value,
+                    "design_sku": target_id,
+                    "scan_count": scanned,
+                    "target": target,
+                    "first_scan": was_first_scan,
+                },
             )
             self._refresh_progress_row(match_p)
             self._update_approve_button()
             if is_session_complete(self.current_session_id):
                 self._on_session_complete()
         else:
-            # Cek mismatch reason: completed atau tidak ada di resi
-            already_full = any(
-                p["design_sku"] == target_id
-                and not p["is_non_stiker"]
-                and p["scanned_packs"] >= p["target_packs"]
-                for p in self.current_progress
-            )
-            reason = (
-                "sudah penuh, tidak perlu lagi"
-                if already_full
-                else "tidak terdaftar di resi ini"
-            )
             self.beep_mismatch()
             self.lbl_last_scan.configure(
-                text=f"✗ MISMATCH: {target_id} — {reason}", text_color=COLOR_MERAH
+                text=f"✗ SKU {target_id} TIDAK ADA di resi ini",
+                text_color=COLOR_MERAH,
             )
-            self.speak("Mismatch")
+            self.speak("SKU tidak sesuai")
             log_event(
                 self.current_session_id,
                 self.current_operator["id"],
@@ -1244,7 +1294,7 @@ class QcStasiunWindow(ctk.CTkToplevel):
                 {
                     "scanned": scanned_value,
                     "design_sku": target_id,
-                    "reason": "already_full" if already_full else "not_in_resi",
+                    "reason": "not_in_resi",
                     "source": source,
                 },
             )
