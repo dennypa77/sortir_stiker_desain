@@ -1,0 +1,31 @@
+<h3>Antrian Task ({{ tasks|length }})</h3>
+<table class="task-table">
+    <thead>
+        <tr>
+            <th>#</th>
+            <th>Status</th>
+            <th>SKU</th>
+            <th>Ambil dari</th>
+            <th>Bawa ke Slot</th>
+            <th>Resi</th>
+            <th>Created</th>
+            <th>Started</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for t in tasks %}
+        <tr class="row-status-{{ t.status }}">
+            <td>{{ t.id }}</td>
+            <td><strong>{{ t.status }}</strong></td>
+            <td><code>{{ t.sku }}</code></td>
+            <td>{{ t.buffer_label }}</td>
+            <td>SLOT {{ t.target_slot_aktif_number }}</td>
+            <td>{{ t.target_resi_nomor }}</td>
+            <td><small>{{ t.created_at }}</small></td>
+            <td><small>{{ t.started_at or '-' }}</small></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8"><em>Tidak ada task aktif</em></td></tr>
+        {% endfor %}
+    </tbody>
+</table>

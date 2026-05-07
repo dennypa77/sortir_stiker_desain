@@ -1,0 +1,7 @@
+<div class="alert alert-success">
+    <strong>DROPOFF OK</strong> — Task #{{ result.task_id }}<br>
+    Plastik <code>{{ result.barcode }}</code> ke SLOT {{ result.target_slot_aktif_number }}
+    (Resi {{ result.target_resi_nomor }})
+    {% if result.resi_completed %}<br><strong>✔ Resi LENGKAP — siap di-pack</strong>{% endif %}
+</div>
+{% include 'partials/_harvester_tasks.html' %}

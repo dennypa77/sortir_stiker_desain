@@ -1,0 +1,18 @@
+{% if info %}<div class="alert alert-info">{{ info }}</div>{% endif %}
+{% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+<p>
+    <strong>{{ buffer_status.total_wadah_aktif }}</strong> wadah aktif,
+    <strong>{{ buffer_status.total_slot }}</strong> slot total,
+    <strong>{{ buffer_status.slot_terpakai }}</strong> terpakai,
+    <strong>{{ buffer_status.slot_kosong }}</strong> kosong.
+</p>
+<table class="task-table">
+    <thead><tr><th>Wadah #</th><th>Aktif</th><th>Capacity</th><th>Terpakai</th><th>Kosong</th><th>Total plastik</th></tr></thead>
+    <tbody>
+        {% for w in buffer_status.breakdown %}
+        <tr><td>{{ w.nomor }}</td><td>{{ '✓' if w.is_active else '✗' }}</td>
+            <td>{{ w.capacity }}</td><td>{{ w.terpakai }}</td>
+            <td>{{ w.kosong }}</td><td>{{ w.total_plastik }}</td></tr>
+        {% endfor %}
+    </tbody>
+</table>

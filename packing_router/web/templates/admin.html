@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Admin{% endblock %}
+{% block content %}
+<section class="panel">
+    <h2>Buffer Status</h2>
+    <div id="admin-buffer">
+        {% include 'partials/_admin_buffer.html' %}
+    </div>
+    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem;">
+        <form hx-post="{{ url_for('admin_add_wadah') }}"
+              hx-target="#admin-buffer" hx-swap="innerHTML">
+            <label>Tambah Wadah — kapasitas:
+                <input type="number" name="capacity" value="10" min="1" max="50" style="width:60px;">
+            </label>
+            <button type="submit">+ Tambah Wadah</button>
+        </form>
+        <form hx-post="{{ url_for('admin_remove_wadah') }}"
+              hx-target="#admin-buffer" hx-swap="innerHTML"
+              hx-confirm="Hapus wadah dengan nomor terbesar? Tolak kalau wadah masih berisi plastik.">
+            <button type="submit" class="btn-reset">− Hapus Wadah Terakhir</button>
+        </form>
+    </div>
+</section>
+
+<section class="panel">
+    <h2>Slot Aktif (Resi)</h2>
+    <div id="admin-slot-aktif">
+        <p>Total slot aktif sekarang: <strong>{{ slot_count }}</strong> slot</p>
+    </div>
+    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem;">
+        <form hx-post="{{ url_for('admin_add_slot_aktif') }}"
+              hx-target="#admin-slot-aktif" hx-swap="innerHTML">
+            <label>Tambah
+                <input type="number" name="count" value="5" min="1" max="100" style="width:60px;">
+                slot
+            </label>
+            <button type="submit">+ Tambah Slot Aktif</button>
+        </form>
+        <form hx-post="{{ url_for('admin_remove_slot_aktif') }}"
+              hx-target="#admin-slot-aktif" hx-swap="innerHTML"
+              hx-confirm="Hapus slot aktif terakhir? Tolak kalau slot sedang dipakai resi 'active' atau 'complete'.">
+            <label>Hapus
+                <input type="number" name="count" value="1" min="1" max="100" style="width:60px;">
+                slot
+            </label>
+            <button type="submit" class="btn-reset">− Hapus Slot Aktif</button>
+        </form>
+    </div>
+    <p style="color:#64748b;font-size:0.85rem;margin-top: 0.5rem;">
+        Slot baru langsung tersedia tanpa restart. Slot fisik di rak harus diberi
+        label nomor sesuai. Hapus slot aktif tidak boleh kalau slot sedang dipakai
+        resi — pack atau cancel resi-nya dulu.
+    </p>
+</section>
+
+<section class="panel">
+    <h2>Reset (Maintenance)</h2>
+    <div id="admin-reset"></div>
+    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem;">
+        <form hx-post="{{ url_for('admin_reset_slot_aktif') }}"
+              hx-target="#admin-reset" hx-swap="innerHTML"
+              hx-confirm="⚠️ Reset SEMUA slot aktif? Resi 'active'/'complete' akan kembali ke 'pending'. Plastik di slot di-mark 'returned'.">
+            <button type="submit" class="btn-reset">🗑️ Reset Slot Aktif</button>
+        </form>
+        <form hx-post="{{ url_for('admin_reset_buffer') }}"
+              hx-target="#admin-reset" hx-swap="innerHTML"
+              hx-confirm="⚠️ Reset SEMUA buffer? Plastik di buffer di-mark 'returned', semua slot buffer kosong.">
+            <button type="submit" class="btn-reset">🗑️ Reset Buffer</button>
+        </form>
+    </div>
+    <p style="color:#64748b;font-size:0.85rem;margin-top: 0.5rem;">
+        Reset = soft delete (data tetap di event_log untuk audit trail). Plastik
+        yang sudah di-pack tetap aman, tidak terpengaruh reset.
+    </p>
+</section>
+
+<section class="panel">
+    <h2>Aging Report (&gt; {{ aging_threshold }} jam)</h2>
+    <table class="task-table">
+        <thead><tr><th>Wadah</th><th>Slot</th><th>SKU</th><th>Plastik</th><th>First scan</th><th>Umur (jam)</th></tr></thead>
+        <tbody>
+            {% for a in aging %}
+            <tr><td>{{ a.wadah_nomor }}</td><td>{{ a.slot_number }}</td><td><code>{{ a.sku }}</code></td>
+                <td>{{ a.plastik_count }}</td><td>{{ a.first_plastik_at }}</td><td>{{ a.age_hours }}</td></tr>
+            {% else %}
+            <tr><td colspan="6"><em>Tidak ada plastik aging</em></td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<section class="panel">
+    <h2>Throughput per jam (12 jam terakhir)</h2>
+    <ul>
+        {% for t in throughput %}
+        <li>{{ t.hour }} — <strong>{{ t.count }}</strong> resi packed</li>
+        {% else %}
+        <li><em>Belum ada pack event</em></li>
+        {% endfor %}
+    </ul>
+</section>
+
+<section class="panel">
+    <h2>Sync Data Resi dari LIST_PESANAN</h2>
+    <p style="color:#475569;">Klik <strong>Sync Sheet</strong> setelah tim
+    gudang upload BigSeller. Modul akan fetch SEMUA row dari sheet
+    <code>LIST_PESANAN</code> dan masukkan resi baru ke pool DB sebagai
+    <code>pending</code>. Resi pending nanti di-setup ke Slot Aktif lewat
+    <strong>Scan Resi</strong> di /operator/scan saat fisiknya datang.</p>
+    <div id="admin-import">
+        {% include 'partials/_admin_import.html' %}
+    </div>
+    <form hx-post="{{ url_for('admin_sync_sheet') }}"
+          hx-target="#admin-import" hx-swap="innerHTML">
+        <button type="submit"><strong>Sync Sheet (LIST_PESANAN)</strong></button>
+    </form>
+
+    <hr style="margin: 1rem 0;">
+
+    <h3>Bulk Import 1 Batch (auto-setup 50 resi pertama) — opsional</h3>
+    <p style="color:#475569;font-size:0.85rem;">
+        Pakai ini cuma kalau mau pre-fill 50 slot aktif dari 1 batch tanpa
+        scan resi 1-by-1. Untuk workflow normal, pakai <strong>Sync Sheet</strong>
+        di atas + scan resi di operator.
+    </p>
+    <form hx-post="{{ url_for('admin_import_batch') }}"
+          hx-target="#admin-import" hx-swap="innerHTML">
+        <input type="text" name="batch_id" placeholder="Batch_ID (e.g. 2026-05-06-B1)" required>
+        <button type="submit">Bulk Import</button>
+    </form>
+</section>
+{% endblock %}

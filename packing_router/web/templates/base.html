@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="id">
+<head>
+    <meta charset="utf-8">
+    <title>{% block title %}Packing Router{% endblock %}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header>
+    <h1>Packing Router — HOG Stiker Desain</h1>
+    <nav>
+        <a href="{{ url_for('dashboard_view') }}">Dashboard</a>
+        <a href="{{ url_for('operator_scan_view') }}">Operator Scan</a>
+        <a href="{{ url_for('admin_view') }}">Admin</a>
+    </nav>
+</header>
+<main>
+    {% block content %}{% endblock %}
+</main>
+</body>
+</html>

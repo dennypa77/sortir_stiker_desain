@@ -1,0 +1,82 @@
+# update_manifest.txt — daftar file yang akan di-sync oleh updater.py
+# Format: 1 path per baris (relatif dari root repo). Baris kosong & yang
+# diawali '#' di-skip. Path subfolder pakai '/' (POSIX-style), updater
+# auto-create parent dir saat write.
+
+# === File inti existing ===
+app.py
+duplicate_files.py
+qc_stasiun.py
+qc_seed.py
+run_qc.py
+test_qc_parser.py
+requirements.txt
+
+# === Launcher batch ===
+start.bat
+start_qc.bat
+start_packing.bat
+install.bat
+
+# === Apps Script (untuk dokumentasi, tim copy ke Google Sheet manual) ===
+code.gs
+
+# === README ===
+README.md
+packing_router_prompt.md
+
+# === Packing Router module — runtime files ===
+packing_router/__init__.py
+packing_router/config.py
+packing_router/db.py
+packing_router/exceptions.py
+packing_router/models.py
+packing_router/utils.py
+packing_router/buffer.py
+packing_router/slot_aktif.py
+packing_router/scan_handler.py
+packing_router/resi_setup.py
+packing_router/harvester.py
+packing_router/maintenance.py
+packing_router/reports.py
+packing_router/sheets_log.py
+packing_router/requirements.txt
+packing_router/run.bat
+packing_router/README.md
+
+# Cron
+packing_router/cron/__init__.py
+packing_router/cron/aging_check.py
+
+# Web
+packing_router/web/__init__.py
+packing_router/web/app.py
+packing_router/web/static/style.css
+packing_router/web/templates/base.html
+packing_router/web/templates/dashboard.html
+packing_router/web/templates/admin.html
+packing_router/web/templates/operator_scan.html
+packing_router/web/templates/partials/_alert.html
+packing_router/web/templates/partials/_scan_result.html
+packing_router/web/templates/partials/_setup_resi_result.html
+packing_router/web/templates/partials/_dashboard_grids.html
+packing_router/web/templates/partials/_harvester_alert.html
+packing_router/web/templates/partials/_harvester_dropoff_ok.html
+packing_router/web/templates/partials/_harvester_pickup_ok.html
+packing_router/web/templates/partials/_harvester_tasks.html
+packing_router/web/templates/partials/_admin_buffer.html
+packing_router/web/templates/partials/_admin_import.html
+packing_router/web/templates/partials/_admin_reset.html
+packing_router/web/templates/partials/_admin_slot_aktif.html
+
+# Tests (opsional — boleh skip kalau employee PC tidak butuh)
+packing_router/tests/__init__.py
+packing_router/tests/conftest.py
+packing_router/tests/test_buffer.py
+packing_router/tests/test_harvester.py
+packing_router/tests/test_maintenance.py
+packing_router/tests/test_race_condition.py
+packing_router/tests/test_resi_setup.py
+packing_router/tests/test_scan_handler.py
+packing_router/tests/test_slot_aktif.py
+packing_router/tests/test_utils.py

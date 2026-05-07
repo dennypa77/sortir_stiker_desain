@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Operator Scan{% endblock %}
+{% block content %}
+
+<section class="panel">
+    <h2>Mode 1 — Scan Resi (setup ke Slot Aktif)</h2>
+    <p style="color:#475569;">Scan kertas resi marketplace yang fisik datang
+    (mis. <code>SPXID060408319585</code>). Sistem akan cari datanya dan
+    taruh resi ke slot aktif kosong terdekat.</p>
+    <form hx-post="{{ url_for('operator_setup_resi') }}"
+          hx-target="#setup-resi-result"
+          hx-swap="innerHTML"
+          hx-on::after-request="document.getElementById('nomor-resi').value=''; document.getElementById('nomor-resi').focus();">
+        <input type="hidden" name="operator_id" value="{{ operator_id }}">
+        <input type="text" id="nomor-resi" name="nomor_resi"
+               autocomplete="off" placeholder="Scan / ketik nomor resi..."
+               class="big-input">
+        <button type="submit">Setup Resi</button>
+    </form>
+    <div id="setup-resi-result"></div>
+</section>
+
+<section class="panel">
+    <h2>Mode 2 — Scan Plastik (sortir output weeding)</h2>
+    <p style="color:#475569;">Scan barcode di plastik (numeric ID, mis.
+    <code>445</code>). Sistem arahkan ke slot aktif yang butuh, atau ke
+    buffer kalau belum ada resi yang butuh.</p>
+    <p style="color:#475569;">Operator: <code>{{ operator_id }}</code></p>
+    <form hx-post="{{ url_for('operator_scan_submit') }}"
+          hx-target="#scan-result"
+          hx-swap="innerHTML"
+          hx-on::after-request="document.getElementById('barcode').value=''; document.getElementById('barcode').focus();">
+        <input type="hidden" name="operator_id" value="{{ operator_id }}">
+        <input type="text" id="barcode" name="barcode" autofocus
+               autocomplete="off" placeholder="Scan barcode plastik (e.g. 445)"
+               class="big-input">
+        <button type="submit">Scan</button>
+    </form>
+    <form hx-post="{{ url_for('operator_undo') }}"
+          hx-target="#scan-result"
+          hx-swap="innerHTML"
+          style="margin-top: 0.5rem;">
+        <input type="hidden" name="operator_id" value="{{ operator_id }}">
+        <button type="submit" class="btn-undo">Undo (window {{ undo_window }} detik)</button>
+    </form>
+</section>
+
+<section id="scan-result" class="panel">
+    {% include 'partials/_scan_result.html' %}
+</section>
+{% endblock %}

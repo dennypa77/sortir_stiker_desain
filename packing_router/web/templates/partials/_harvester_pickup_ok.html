@@ -1,0 +1,7 @@
+<div class="alert alert-success">
+    <strong>PICKUP OK</strong> — Task #{{ result.task_id }}<br>
+    Ambil <code>{{ result.barcode }}</code> dari {{ result.buffer_label }}<br>
+    Bawa ke <strong>SLOT {{ result.target_slot_aktif_number }}</strong> (Resi {{ result.target_resi_nomor }})<br>
+    <em>Jangan lupa scan ulang saat dropoff.</em>
+</div>
+{% include 'partials/_harvester_tasks.html' %}

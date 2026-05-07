@@ -1,52 +1,98 @@
-import urllib.request
+"""Auto-updater: sync file dari GitHub raw ke folder lokal.
+
+Mekanisme:
+1. Fetch ``update_manifest.txt`` dari server (line-per-line list file).
+2. Untuk tiap file di manifest, fetch raw content + bandingkan dengan lokal.
+3. Kalau berbeda → overwrite. Auto-create parent directory untuk subfolder
+   (mis. ``packing_router/web/app.py``).
+
+Kalau manifest gagal di-fetch (offline / 404), pakai ``FILES_TO_UPDATE``
+fallback hardcoded.
+"""
 import os
 import time
+import urllib.request
 
-# Daftar file inti yang akan selalu disinkronkan dari GitHub
+BASE_URL = "https://raw.githubusercontent.com/dennypa77/sortir_stiker_desain/main/"
+MANIFEST_FILE = "update_manifest.txt"
+
+# Fallback list (kompatibel dengan versi lama updater) kalau manifest gagal di-fetch
 FILES_TO_UPDATE = [
     "app.py",
     "duplicate_files.py",
     "requirements.txt",
     "qc_stasiun.py",
     "qc_seed.py",
-    "run_qc.py"
+    "run_qc.py",
 ]
 
-BASE_URL = "https://raw.githubusercontent.com/dennypa77/sortir_stiker_desain/main/"
+
+def _fetch_text(filename, timeout=10):
+    """Fetch file dari BASE_URL. Return bytes atau raise."""
+    url = BASE_URL + filename.replace(" ", "%20").replace("\\", "/")
+    response = urllib.request.urlopen(url, timeout=timeout)
+    return response.read()
+
+
+def _fetch_manifest():
+    """Return list nama file dari manifest, atau None kalau gagal."""
+    try:
+        content = _fetch_text(MANIFEST_FILE).decode("utf-8")
+    except Exception as e:
+        print(f" -> Manifest tidak bisa di-fetch ({e}), pakai daftar default.")
+        return None
+    files = []
+    for raw in content.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        files.append(line)
+    return files
+
 
 def check_for_updates():
     print("Mencari pembaruan aplikasi dari server...")
+    files = _fetch_manifest()
+    if files is None:
+        files = FILES_TO_UPDATE
+
     has_updates = False
-    
-    for filename in FILES_TO_UPDATE:
-        url = BASE_URL + filename.replace(" ", "%20")
+    failed = 0
+    for filename in files:
         try:
-            # Download file secara langsung (Raw)
-            response = urllib.request.urlopen(url, timeout=10)
-            remote_content = response.read()
-            
-            # Baca file lokal
+            remote_content = _fetch_text(filename)
+
             local_content = b""
             if os.path.exists(filename):
-                with open(filename, 'rb') as f:
+                with open(filename, "rb") as f:
                     local_content = f.read()
-                    
-            # Jika ada perbedaan isi (kode berubah), timpa dengan yang baru
+
             if remote_content != local_content:
                 print(f" -> Mengunduh versi terbaru: {filename}...")
-                with open(filename, 'wb') as f:
+                parent = os.path.dirname(filename)
+                if parent:
+                    os.makedirs(parent, exist_ok=True)
+                with open(filename, "wb") as f:
                     f.write(remote_content)
                 has_updates = True
-                
+
         except Exception as e:
-            print(f" -> Peringatan: Gagal mengecek/mengunduh {filename}. ({e})")
-            print(" -> Mungkin tidak ada koneksi internet. Menggunakan versi lokal saat ini.")
-            
+            failed += 1
+            # Hanya log warning kalau file ada di manifest tapi gagal — mungkin
+            # belum di-push, file di-rename, atau koneksi putus.
+            if failed <= 3:
+                print(f" -> Peringatan: Gagal mengecek/mengunduh {filename}. ({e})")
+            elif failed == 4:
+                print(" -> ... (warning lain di-suppress)")
+
+    if failed > 0:
+        print(f" -> Total {failed} file gagal di-fetch. Mungkin offline atau file belum di-push ke server.")
+
     if has_updates:
-        print("\nPembaruan berhasil diinstal! Menjalankan aplikasi...")
-        # Jika requirements berubah, kita mungkin perlu beritahu pengguna (opsional)
+        print("\nPembaruan berhasil diinstal!\n")
     else:
         print("Aplikasi Anda sudah versi terbaru!\n")
+
 
 if __name__ == "__main__":
     check_for_updates()

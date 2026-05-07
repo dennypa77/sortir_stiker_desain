@@ -1,0 +1,30 @@
+{% if error %}
+    <div class="alert alert-error" style="margin-top: 0.5rem;">{{ error }}</div>
+{% elif setup_result %}
+    <div class="scan-instruction scan-place_in_slot_aktif" style="margin-top: 0.5rem;">
+        <div class="scan-label">RESI {{ setup_result.nomor_resi }} → SLOT {{ setup_result.slot_number }}</div>
+    </div>
+    {% if setup_result.buffer_pickups %}
+        <div class="alert alert-info" style="margin-top: 0.5rem;">
+            <strong>Ambil dari Buffer dulu ({{ setup_result.buffer_pickups|length }} SKU):</strong>
+            <ul style="margin: 0.5rem 0 0 1rem;">
+                {% for p in setup_result.buffer_pickups %}
+                <li>
+                    <strong>SKU {{ p.sku }}</strong> ({{ p.varian }}pcs):
+                    ambil <strong>{{ p.ambil_pack }}</strong> pack dari
+                    <strong>{{ p.buffer_label }}</strong>
+                    {% if p.ambil_pack < p.butuh_pack %}
+                        <span style="color:#b91c1c;">(masih kurang {{ p.butuh_pack - p.ambil_pack }} pack — tunggu plastik datang)</span>
+                    {% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+            <p style="margin: 0.5rem 0 0 0;"><em>Task harvester sudah otomatis dibuat —
+            lihat di <a href="{{ url_for('harvester_queue_view') }}">/harvester/queue</a>.</em></p>
+        </div>
+    {% else %}
+        <div class="alert alert-info" style="margin-top: 0.5rem;">
+            Belum ada SKU resi ini di buffer. Tunggu plastik di-scan lewat Mode 2 di bawah.
+        </div>
+    {% endif %}
+{% endif %}
