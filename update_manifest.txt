@@ -59,6 +59,7 @@ packing_router/web/templates/operator_scan.html
 packing_router/web/templates/partials/_alert.html
 packing_router/web/templates/partials/_scan_result.html
 packing_router/web/templates/partials/_setup_resi_result.html
+packing_router/web/templates/partials/_slot_details_panel.html
 packing_router/web/templates/partials/_dashboard_grids.html
 packing_router/web/templates/partials/_harvester_alert.html
 packing_router/web/templates/partials/_harvester_dropoff_ok.html
@@ -77,6 +78,7 @@ packing_router/tests/test_harvester.py
 packing_router/tests/test_maintenance.py
 packing_router/tests/test_race_condition.py
 packing_router/tests/test_resi_setup.py
+packing_router/tests/test_resi_prefill.py
 packing_router/tests/test_scan_handler.py
 packing_router/tests/test_slot_aktif.py
 packing_router/tests/test_utils.py
