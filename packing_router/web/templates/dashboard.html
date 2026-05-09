@@ -25,6 +25,8 @@
     </div>
 
     <aside class="dash-side">
+        {% include 'partials/_slot_details_panel.html' %}
+
         <div class="panel">
             <div class="mode-tabs">
                 <button class="mode-tab active" data-mode="setup">Setup Resi</button>
@@ -33,62 +35,56 @@
             </div>
 
             <div class="mode-pane mode-setup active">
-                <h3>Mode 1 — Setup Resi</h3>
-                <p style="color:#64748b;font-size:0.85rem;">
-                    Scan kertas resi marketplace yang fisik datang. Sistem cari di
-                    pool DB → assign ke slot aktif kosong terkecil.
-                </p>
                 <form hx-post="{{ url_for('operator_setup_resi') }}"
                       hx-target="#side-result"
                       hx-swap="innerHTML"
                       hx-on::after-request="this.querySelector('input[name=nomor_resi]').value=''; this.querySelector('input[name=nomor_resi]').focus();">
                     <input type="hidden" name="operator_id" value="{{ operator_id }}">
-                    <input type="text" name="nomor_resi" autofocus
-                           autocomplete="off" placeholder="Scan/ketik nomor resi"
-                           class="big-input">
-                    <button type="submit">Setup</button>
+                    <div style="display:flex; gap:0.3rem;">
+                        <input type="text" name="nomor_resi" autofocus
+                               autocomplete="off" placeholder="Scan/ketik nomor resi"
+                               class="big-input" style="flex:1;">
+                        <button type="submit">Setup</button>
+                    </div>
                 </form>
             </div>
 
             <div class="mode-pane mode-scan" style="display:none;">
-                <h3>Mode 2 — Scan Plastik</h3>
-                <p style="color:#64748b;font-size:0.85rem;">
-                    Scan barcode plastik output weeding (numeric, mis.
-                    <code>445</code>).
-                </p>
                 <form hx-post="{{ url_for('operator_scan_submit') }}"
                       hx-target="#side-result"
                       hx-swap="innerHTML"
                       hx-on::after-request="this.querySelector('input[name=barcode]').value=''; this.querySelector('input[name=barcode]').focus();">
                     <input type="hidden" name="operator_id" value="{{ operator_id }}">
-                    <input type="text" name="barcode" autocomplete="off"
-                           placeholder="Scan barcode plastik (e.g. 445)"
-                           class="big-input">
-                    <button type="submit">Scan</button>
-                </form>
-                <form hx-post="{{ url_for('operator_undo') }}"
-                      hx-target="#side-result"
-                      hx-swap="innerHTML"
-                      style="margin-top: 0.5rem;">
-                    <input type="hidden" name="operator_id" value="{{ operator_id }}">
-                    <button type="submit" class="btn-undo">Undo (window {{ undo_window }} detik)</button>
+                    <div style="display:flex; gap:0.3rem; align-items:stretch;">
+                        <input type="text" name="barcode" autocomplete="off"
+                               placeholder="Scan barcode plastik (e.g. 445)"
+                               class="big-input" style="flex:1;">
+                        <button type="submit">Scan</button>
+                        <button type="button"
+                                hx-post="{{ url_for('operator_undo') }}"
+                                hx-include="closest form"
+                                hx-target="#side-result"
+                                hx-swap="innerHTML"
+                                class="btn-undo"
+                                title="Undo scan terakhir (window {{ undo_window }} detik)">
+                            Undo {{ undo_window }}s
+                        </button>
+                    </div>
                 </form>
             </div>
 
             <div class="mode-pane mode-harvest" style="display:none;">
-                <h3>Mode 3 — Harvester Pickup &amp; Dropoff</h3>
-                <p style="color:#64748b;font-size:0.85rem;">
-                    Scan plastik 2x: di buffer (pickup) → di slot aktif (dropoff).
-                </p>
-                <h4 style="margin: 0.6rem 0 0.2rem 0;">1) Pickup di buffer</h4>
+                <h4 style="margin: 0.4rem 0 0.2rem 0;">1) Pickup di buffer</h4>
                 <form hx-post="{{ url_for('harvester_pickup') }}"
                       hx-target="#side-result"
                       hx-swap="innerHTML"
                       hx-on::after-request="this.querySelector('input[name=barcode]').value=''; this.querySelector('input[name=barcode]').focus();">
                     <input type="hidden" name="harvester_id" value="{{ operator_id }}">
-                    <input type="text" name="barcode" autocomplete="off"
-                           placeholder="Scan plastik di buffer" class="big-input">
-                    <button type="submit">Pickup</button>
+                    <div style="display:flex; gap:0.3rem;">
+                        <input type="text" name="barcode" autocomplete="off"
+                               placeholder="Scan plastik di buffer" class="big-input" style="flex:1;">
+                        <button type="submit">Pickup</button>
+                    </div>
                 </form>
                 <h4 style="margin: 0.6rem 0 0.2rem 0;">2) Dropoff di slot aktif</h4>
                 <form hx-post="{{ url_for('harvester_dropoff') }}"
@@ -96,14 +92,16 @@
                       hx-swap="innerHTML"
                       hx-on::after-request="this.querySelector('input[name=barcode]').value=''; this.querySelector('input[name=barcode]').focus();">
                     <input type="hidden" name="harvester_id" value="{{ operator_id }}">
-                    <input type="number" name="slot_aktif_number" placeholder="Slot #" min="1" required>
-                    <input type="text" name="barcode" autocomplete="off"
-                           placeholder="Scan plastik lagi" class="big-input">
-                    <button type="submit">Dropoff</button>
+                    <div style="display:flex; gap:0.3rem;">
+                        <input type="number" name="slot_aktif_number" placeholder="Slot #" min="1" required style="width:5rem;">
+                        <input type="text" name="barcode" autocomplete="off"
+                               placeholder="Scan plastik lagi" class="big-input" style="flex:1;">
+                        <button type="submit">Dropoff</button>
+                    </div>
                 </form>
             </div>
 
-            <div id="side-result" style="margin-top: 0.75rem;"></div>
+            <div id="side-result" style="margin-top: 0.6rem;"></div>
         </div>
 
         <div class="panel">
@@ -192,23 +190,41 @@
         document.querySelectorAll('.cell-active').forEach(function(el) { el.classList.remove('cell-active'); });
         document.querySelectorAll('.cell-match').forEach(function(el) { el.classList.remove('cell-match'); });
     }
+
+    // Klik slot/buffer cell → highlight match SKU + (kalau ada resi_id) load
+    // detail panel di sidebar.
     document.addEventListener('click', function(ev) {
+        // Skip kalau klik tombol (form submit) dalam slot card
+        if (ev.target.closest('button, form')) {
+            // Tetap lanjut untuk highlight, tapi jangan fetch panel
+        }
         var el = ev.target.closest('[data-skus]');
         if (!el) {
             applyMatchHighlight();
             return;
         }
         var skus = (el.getAttribute('data-skus') || '').split(',').filter(Boolean);
-        if (skus.length === 0) return;
-        applyMatchHighlight();
-        el.classList.add('cell-active');
-        document.querySelectorAll('[data-skus]').forEach(function(other) {
-            if (other === el) return;
-            var others = (other.getAttribute('data-skus') || '').split(',').filter(Boolean);
-            if (others.some(function(s) { return skus.indexOf(s) >= 0; })) {
-                other.classList.add('cell-match');
-            }
-        });
+        if (skus.length > 0) {
+            applyMatchHighlight();
+            el.classList.add('cell-active');
+            document.querySelectorAll('[data-skus]').forEach(function(other) {
+                if (other === el) return;
+                var others = (other.getAttribute('data-skus') || '').split(',').filter(Boolean);
+                if (others.some(function(s) { return skus.indexOf(s) >= 0; })) {
+                    other.classList.add('cell-match');
+                }
+            });
+        }
+
+        // Load detail panel kalau slot ini punya resi
+        var resiId = el.getAttribute('data-resi-id');
+        if (resiId && window.htmx) {
+            try {
+                window.htmx.ajax('GET',
+                    '/slot-aktif/' + encodeURIComponent(resiId) + '/details-panel',
+                    { target: '#kurang-panel', swap: 'outerHTML' });
+            } catch (e) { console.error('details-panel fetch error:', e); }
+        }
     });
 })();
 </script>

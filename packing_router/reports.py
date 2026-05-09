@@ -48,9 +48,9 @@ def get_slot_aktif_status() -> List[SlotStatus]:
             continue
         missing = conn.execute(
             """
-            SELECT sku, varian, quantity_ordered, quantity_fulfilled
+            SELECT sku, varian, quantity_ordered, quantity_fulfilled, prefilled_qty
             FROM resi_item WHERE resi_id = ?
-              AND quantity_fulfilled < quantity_ordered
+              AND (quantity_ordered - COALESCE(prefilled_qty, 0) - COALESCE(quantity_fulfilled, 0)) > 0
             ORDER BY id ASC
             """,
             (r["resi_id"],),
@@ -61,7 +61,12 @@ def get_slot_aktif_status() -> List[SlotStatus]:
                 "varian": m["varian"],
                 "ordered": m["quantity_ordered"],
                 "fulfilled": m["quantity_fulfilled"],
-                "kurang": m["quantity_ordered"] - m["quantity_fulfilled"],
+                "prefilled": m["prefilled_qty"] or 0,
+                "kurang": (
+                    m["quantity_ordered"]
+                    - (m["prefilled_qty"] or 0)
+                    - (m["quantity_fulfilled"] or 0)
+                ),
             }
             for m in missing
         ]
@@ -144,7 +149,7 @@ def get_buffer_match_status() -> dict:
         JOIN resi r ON r.id = ri.resi_id
         WHERE r.status = 'active'
           AND r.slot_aktif_number IS NOT NULL
-          AND ri.quantity_fulfilled < ri.quantity_ordered
+          AND (ri.quantity_ordered - COALESCE(ri.prefilled_qty, 0) - COALESCE(ri.quantity_fulfilled, 0)) > 0
         """
     ).fetchall()
     needed_map: dict = {}
@@ -233,27 +238,60 @@ def get_slot_aktif_match_status() -> List[dict]:
             continue
         missing = conn.execute(
             """
-            SELECT sku, varian, quantity_ordered, quantity_fulfilled
+            SELECT id, sku, varian, quantity_ordered, quantity_fulfilled, prefilled_qty
             FROM resi_item WHERE resi_id = ?
-              AND quantity_fulfilled < quantity_ordered
+              AND (quantity_ordered - COALESCE(prefilled_qty, 0) - COALESCE(quantity_fulfilled, 0)) > 0
             ORDER BY id ASC
             """,
             (r["id"],),
         ).fetchall()
         missing_list = [
             {
+                "item_id": m["id"],
                 "sku": m["sku"],
                 "varian": m["varian"],
                 "ordered": m["quantity_ordered"],
                 "fulfilled": m["quantity_fulfilled"],
-                "kurang": m["quantity_ordered"] - m["quantity_fulfilled"],
+                "prefilled": m["prefilled_qty"] or 0,
+                "kurang": (
+                    m["quantity_ordered"]
+                    - (m["prefilled_qty"] or 0)
+                    - (m["quantity_fulfilled"] or 0)
+                ),
                 "ordered_pcs": (m["quantity_ordered"] or 0) * 10,
                 "fulfilled_pcs": (m["quantity_fulfilled"] or 0) * 10,
-                "kurang_pcs": ((m["quantity_ordered"] or 0) - (m["quantity_fulfilled"] or 0)) * 10,
+                "prefilled_pcs": (m["prefilled_qty"] or 0) * 10,
+                "kurang_pcs": (
+                    (m["quantity_ordered"] or 0)
+                    - (m["prefilled_qty"] or 0)
+                    - (m["quantity_fulfilled"] or 0)
+                ) * 10,
                 "in_buffer": m["sku"] in buffer_skus,
                 "untouched": (m["quantity_fulfilled"] or 0) == 0,
             }
             for m in missing
+        ]
+        # Tampilkan juga SKU yang sudah fully prefilled (info untuk packer)
+        prefilled_done = conn.execute(
+            """
+            SELECT id, sku, varian, quantity_ordered, prefilled_qty, quantity_fulfilled
+            FROM resi_item WHERE resi_id = ?
+              AND COALESCE(prefilled_qty, 0) > 0
+              AND (quantity_ordered - COALESCE(prefilled_qty, 0) - COALESCE(quantity_fulfilled, 0)) <= 0
+            ORDER BY id ASC
+            """,
+            (r["id"],),
+        ).fetchall()
+        prefilled_list = [
+            {
+                "item_id": p["id"],
+                "sku": p["sku"],
+                "varian": p["varian"],
+                "ordered": p["quantity_ordered"],
+                "prefilled": p["prefilled_qty"] or 0,
+                "ordered_pcs": (p["quantity_ordered"] or 0) * 10,
+            }
+            for p in prefilled_done
         ]
         match_skus = [m["sku"] for m in missing_list if m["in_buffer"]]
         if r["status"] == "active":
@@ -279,6 +317,7 @@ def get_slot_aktif_match_status() -> List[dict]:
                 "nomor_resi": r["nomor_resi"],
                 "status": status,
                 "missing": missing_list,
+                "prefilled": prefilled_list,
                 "match_skus": match_skus,
                 "minutes_waiting": minutes_waiting,
                 "completed_at": r["completed_at"],

@@ -53,20 +53,27 @@ def _create_harvester_tasks_for_resi(
     resi_id: int,
     actor: str,
 ) -> List[int]:
-    """Untuk tiap resi_item yang masih kurang, cek buffer_slot dengan SKU sama.
-    Buat ``harvester_task`` (status='pending') sebanyak min(buffer plastik_count,
-    sisa quantity)."""
+    """Untuk tiap resi_item yang masih kurang (sisa = ordered - prefilled - fulfilled),
+    cek buffer_slot dengan SKU sama. Buat ``harvester_task`` (status='pending')
+    sebanyak min(buffer plastik_count, sisa quantity)."""
     items = conn.execute(
         """
-        SELECT id, sku, varian, quantity_ordered, quantity_fulfilled
+        SELECT id, sku, varian, quantity_ordered, quantity_fulfilled, prefilled_qty
         FROM resi_item
-        WHERE resi_id = ? AND quantity_fulfilled < quantity_ordered
+        WHERE resi_id = ?
+          AND (quantity_ordered - COALESCE(prefilled_qty, 0) - COALESCE(quantity_fulfilled, 0)) > 0
         """,
         (resi_id,),
     ).fetchall()
     created: List[int] = []
     for item in items:
-        sisa = item["quantity_ordered"] - item["quantity_fulfilled"]
+        sisa = (
+            item["quantity_ordered"]
+            - (item["prefilled_qty"] or 0)
+            - (item["quantity_fulfilled"] or 0)
+        )
+        if sisa <= 0:
+            continue
         slot = find_buffer_slot_for_sku(item["sku"], conn=conn)
         if slot is None or slot.plastik_count <= 0:
             continue
@@ -94,23 +101,30 @@ def _create_harvester_tasks_for_resi(
     return created
 
 
+
+
 def _build_buffer_pickup_instructions(
     conn: sqlite3.Connection, resi_id: int
 ) -> List[dict]:
     """Setelah resi di-setup, susun list instruksi pickup dari buffer
-    (untuk display ke operator/harvester)."""
+    (untuk display ke operator/harvester). Hanya item yang sisa-nya > 0
+    setelah dikurangi prefilled_qty + quantity_fulfilled."""
     instructions: List[dict] = []
     items = conn.execute(
         """
-        SELECT id, sku, varian, quantity_ordered, quantity_fulfilled
+        SELECT id, sku, varian, quantity_ordered, quantity_fulfilled, prefilled_qty
         FROM resi_item WHERE resi_id = ?
-          AND quantity_fulfilled < quantity_ordered
+          AND (quantity_ordered - COALESCE(prefilled_qty, 0) - COALESCE(quantity_fulfilled, 0)) > 0
         ORDER BY id ASC
         """,
         (resi_id,),
     ).fetchall()
     for it in items:
-        sisa = it["quantity_ordered"] - it["quantity_fulfilled"]
+        sisa = (
+            it["quantity_ordered"]
+            - (it["prefilled_qty"] or 0)
+            - (it["quantity_fulfilled"] or 0)
+        )
         slot = find_buffer_slot_for_sku(it["sku"], conn=conn)
         if slot is None or slot.plastik_count <= 0:
             continue
@@ -136,7 +150,9 @@ def handle_setup_resi_aktif(
     actor: str = "admin",
     conn: Optional[sqlite3.Connection] = None,
 ) -> SetupResult:
-    """Setup resi ke Slot Aktif (slot_number 1..SLOTS_PER_WAVE)."""
+    """Setup resi ke Slot Aktif (slot_number 1..N). 1-step, tidak pakai
+    preview/checkbox prefilled. Untuk SKU yang sudah dari stok gudang,
+    operator klik tombol "📦 Gudang" per-SKU di slot card setelah setup."""
     if not slot_aktif_exists(slot_number):
         raise SlotAktifConflictError(
             f"slot_number {slot_number} tidak ada di tabel slot_aktif (atau is_active=0)"
@@ -174,7 +190,6 @@ def handle_setup_resi_aktif(
             "WHERE id = ?",
             (slot_number, now_iso(), resi_id),
         )
-        # Activate wave-nya kalau masih pending
         tc.execute(
             "UPDATE wave SET status = 'active', activated_at = COALESCE(activated_at, ?) "
             "WHERE id = (SELECT wave_id FROM resi WHERE id = ?) AND status = 'pending'",
@@ -217,6 +232,10 @@ def setup_resi_by_nomor(
 
     Resi harus sudah ada di DB (sync-ed dari sheet). Kalau belum ada, raise
     ``ResiNotFoundError`` — minta admin Sync Sheet di /admin dulu.
+
+    Untuk SKU yang sudah dari stok gudang (stabilo): operator klik tombol
+    "📦 Gudang" per-SKU di slot card setelah resi di-setup (lihat
+    ``mark_resi_item_prefilled`` di maintenance.py).
     """
     nomor_resi = nomor_resi.strip()
     if not nomor_resi:

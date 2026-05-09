@@ -161,9 +161,9 @@ def harvester_dropoff_scan(
             )
         item = tc.execute(
             """
-            SELECT id, quantity_fulfilled, quantity_ordered FROM resi_item
+            SELECT id, quantity_fulfilled, quantity_ordered, prefilled_qty FROM resi_item
             WHERE resi_id = ? AND sku = ?
-              AND quantity_fulfilled < quantity_ordered
+              AND (quantity_ordered - COALESCE(prefilled_qty, 0) - COALESCE(quantity_fulfilled, 0)) > 0
             ORDER BY id ASC LIMIT 1
             """,
             (task["target_resi_id"], plastik["sku"]),
@@ -247,13 +247,18 @@ def quick_harvest_to_resi(
                 f"Resi status='{resi['status']}', butuh active/complete"
             )
         items = c.execute(
-            "SELECT id, sku, varian, quantity_ordered, quantity_fulfilled "
-            "FROM resi_item WHERE resi_id = ? AND quantity_fulfilled < quantity_ordered "
+            "SELECT id, sku, varian, quantity_ordered, quantity_fulfilled, prefilled_qty "
+            "FROM resi_item WHERE resi_id = ? "
+            "AND (quantity_ordered - COALESCE(prefilled_qty, 0) - COALESCE(quantity_fulfilled, 0)) > 0 "
             "ORDER BY id ASC",
             (resi_id,),
         ).fetchall()
         for item in items:
-            sisa = item["quantity_ordered"] - item["quantity_fulfilled"]
+            sisa = (
+                item["quantity_ordered"]
+                - (item["prefilled_qty"] or 0)
+                - (item["quantity_fulfilled"] or 0)
+            )
             slot = find_buffer_slot_for_sku(item["sku"], conn=c)
             if slot is None or slot.plastik_count <= 0:
                 continue
@@ -306,15 +311,21 @@ def quick_harvest_to_resi(
         )
     pending: list = []
     for item in conn.execute(
-        "SELECT sku, varian, quantity_ordered, quantity_fulfilled FROM resi_item "
-        "WHERE resi_id = ? AND quantity_fulfilled < quantity_ordered ORDER BY id ASC",
+        "SELECT sku, varian, quantity_ordered, quantity_fulfilled, prefilled_qty "
+        "FROM resi_item WHERE resi_id = ? "
+        "AND (quantity_ordered - COALESCE(prefilled_qty, 0) - COALESCE(quantity_fulfilled, 0)) > 0 "
+        "ORDER BY id ASC",
         (resi_id,),
     ).fetchall():
         pending.append(
             {
                 "sku": item["sku"],
                 "varian": item["varian"],
-                "kurang": item["quantity_ordered"] - item["quantity_fulfilled"],
+                "kurang": (
+                    item["quantity_ordered"]
+                    - (item["prefilled_qty"] or 0)
+                    - (item["quantity_fulfilled"] or 0)
+                ),
             }
         )
     return {"moved": moved, "pending": pending, "resi_completed": completed}

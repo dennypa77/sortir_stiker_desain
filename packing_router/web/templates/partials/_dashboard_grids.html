@@ -5,34 +5,17 @@
     {% for s in slots %}
     <div class="cell cell-aktif slot-{{ s.status }} {% if s.match_skus %}has-match{% endif %}"
          data-skus="{{ s.match_skus|join(',') }}"
-         title="Slot {{ s.slot_number }}{% if s.nomor_resi %} — {{ s.nomor_resi }}{% endif %}">
+         {% if s.resi_id %}data-resi-id="{{ s.resi_id }}"{% endif %}
+         title="Slot {{ s.slot_number }}{% if s.nomor_resi %} — {{ s.nomor_resi }}{% endif %}{% if s.missing %} • {{ s.missing|length }} SKU kurang{% endif %}{% if s.prefilled %} • {{ s.prefilled|length }} dari gudang{% endif %}">
         <div class="cell-no">#{{ s.slot_number }}</div>
         {% if s.resi_id %}
             <div class="cell-resi">{{ s.nomor_resi }}</div>
             <div class="cell-status">{{ s.status|upper }}</div>
             {% if s.minutes_waiting is not none %}<small>{{ s.minutes_waiting }} mnt</small>{% endif %}
-            {% if s.missing %}
-            <details class="cell-detail">
-                <summary>Kurang ({{ s.missing|length }})</summary>
-                <ul>
-                    {% for m in s.missing %}
-                    <li>
-                        <div><code>{{ m.sku }}</code> ({{ m.varian }}pcs)</div>
-                        <div class="cell-jumlah">JUMLAH {{ m.ordered_pcs }}PCS</div>
-                        <div class="cell-progress">
-                            {% if m.untouched %}
-                                <strong style="color:#dc2626;">BELUM DI-SCAN</strong>
-                            {% else %}
-                                ✓ {{ m.fulfilled_pcs }}/{{ m.ordered_pcs }} pcs
-                                ({{ m.fulfilled }}/{{ m.ordered }} pack)
-                            {% endif %}
-                        </div>
-                        {% if m.in_buffer %}<span class="match-tag">📦 di buffer</span>{% endif %}
-                    </li>
-                    {% endfor %}
-                </ul>
-            </details>
-            {% endif %}
+            <div class="cell-summary" style="font-size:0.7rem; margin-top:0.15rem;">
+                {% if s.missing %}<span style="color:#b91c1c;">⚠ {{ s.missing|length }} kurang</span>{% endif %}
+                {% if s.prefilled %}<span style="color:#166534; margin-left:0.3rem;">📦 {{ s.prefilled|length }}</span>{% endif %}
+            </div>
             {% if s.match_skus and s.status in ('merah', 'kuning') %}
             <form hx-post="{{ url_for('quick_harvest_action', resi_id=s.resi_id) }}"
                   hx-target="#dashboard-grids" hx-swap="innerHTML">

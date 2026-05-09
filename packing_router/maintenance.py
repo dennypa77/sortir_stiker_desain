@@ -1,4 +1,4 @@
-"""cancel_resi, undo_last_scan, pack_resi, mark_resi_done, reset_slot_aktif, reset_buffer."""
+"""cancel_resi, undo_last_scan, pack_resi, mark_resi_done, mark_resi_item_prefilled, reset_slot_aktif, reset_buffer."""
 import json
 import sqlite3
 from typing import Optional
@@ -69,7 +69,7 @@ def cancel_resi(resi_id: int, actor: str = "admin") -> dict:
             (resi_id,),
         )
         c.execute(
-            "UPDATE resi_item SET quantity_fulfilled = 0 WHERE resi_id = ?",
+            "UPDATE resi_item SET quantity_fulfilled = 0, prefilled_qty = 0 WHERE resi_id = ?",
             (resi_id,),
         )
         c.execute(
@@ -244,6 +244,112 @@ def mark_resi_done(resi_id: int, actor: str = "operator") -> dict:
     return {"resi_id": resi_id, "nomor_resi": resi["nomor_resi"]}
 
 
+def mark_resi_item_prefilled(
+    resi_id: int,
+    item_id: int,
+    actor: str = "operator",
+) -> dict:
+    """Tandai resi_item sebagai sudah dari stok gudang (stabilo).
+
+    Set ``prefilled_qty = quantity_ordered`` untuk item itu — sistem TIDAK
+    akan minta plastik fisik untuk SKU ini, dan harvester task pending untuk
+    SKU ini di resi ini akan di-cancel (plastik kembali ke buffer untuk resi lain).
+
+    Kalau setelah mark prefill ini semua item resi sudah ter-fulfill
+    (prefilled+fulfilled >= ordered), resi auto-transition ke 'complete'.
+
+    Toggle behavior: kalau item sudah prefilled, panggil function ini
+    me-reset prefilled_qty=0 (un-mark). Berguna kalau operator salah klik.
+    """
+    conn = get_connection()
+    with transaction(conn) as c:
+        resi = c.execute(
+            "SELECT id, nomor_resi, status FROM resi WHERE id = ?",
+            (resi_id,),
+        ).fetchone()
+        if resi is None:
+            raise ResiNotFoundError(f"Resi id={resi_id} tidak ditemukan")
+        if resi["status"] not in ("active", "complete"):
+            raise SlotAktifConflictError(
+                f"Resi status='{resi['status']}', tidak bisa di-mark prefilled"
+            )
+        item = c.execute(
+            "SELECT id, sku, varian, quantity_ordered, prefilled_qty, quantity_fulfilled "
+            "FROM resi_item WHERE id = ? AND resi_id = ?",
+            (item_id, resi_id),
+        ).fetchone()
+        if item is None:
+            raise ResiNotFoundError(
+                f"Resi_item id={item_id} tidak ditemukan di resi {resi_id}"
+            )
+        ordered = item["quantity_ordered"] or 0
+        prev_prefilled = item["prefilled_qty"] or 0
+        # Toggle: kalau sudah fully prefilled → un-mark; kalau belum → mark.
+        new_prefilled = 0 if prev_prefilled >= ordered else ordered
+        c.execute(
+            "UPDATE resi_item SET prefilled_qty = ? WHERE id = ?",
+            (new_prefilled, item_id),
+        )
+        # Cancel pending harvester_task untuk SKU ini di resi ini kalau di-mark
+        if new_prefilled >= ordered and ordered > 0:
+            c.execute(
+                "UPDATE harvester_task SET status = 'cancelled', completed_at = ? "
+                "WHERE target_resi_id = ? AND sku = ? AND status = 'pending'",
+                (now_iso(), resi_id, item["sku"]),
+            )
+        # Cek apakah resi sudah lengkap setelah update
+        completed = False
+        if new_prefilled >= ordered:
+            missing_row = c.execute(
+                "SELECT COUNT(*) AS missing FROM resi_item WHERE resi_id = ? "
+                "AND (quantity_ordered - COALESCE(prefilled_qty, 0) - COALESCE(quantity_fulfilled, 0)) > 0",
+                (resi_id,),
+            ).fetchone()
+            if missing_row["missing"] == 0 and resi["status"] == "active":
+                c.execute(
+                    "UPDATE resi SET status = 'complete', completed_at = ? WHERE id = ?",
+                    (now_iso(), resi_id),
+                )
+                completed = True
+        # Kalau un-mark dan resi sebelumnya complete, balikin ke active
+        if new_prefilled < ordered and resi["status"] == "complete":
+            still_complete_row = c.execute(
+                "SELECT COUNT(*) AS missing FROM resi_item WHERE resi_id = ? "
+                "AND (quantity_ordered - COALESCE(prefilled_qty, 0) - COALESCE(quantity_fulfilled, 0)) > 0",
+                (resi_id,),
+            ).fetchone()
+            if still_complete_row["missing"] > 0:
+                c.execute(
+                    "UPDATE resi SET status = 'active', completed_at = NULL WHERE id = ?",
+                    (resi_id,),
+                )
+        log_event(
+            "mark_prefilled",
+            actor,
+            "resi_item",
+            item_id,
+            {
+                "resi_id": resi_id,
+                "nomor_resi": resi["nomor_resi"],
+                "sku": item["sku"],
+                "varian": item["varian"],
+                "prefilled_qty": new_prefilled,
+                "previous_prefilled": prev_prefilled,
+                "resi_completed": completed,
+                "action": "set" if new_prefilled > 0 else "unset",
+            },
+            conn=c,
+        )
+    return {
+        "resi_id": resi_id,
+        "item_id": item_id,
+        "sku": item["sku"],
+        "prefilled_qty": new_prefilled,
+        "is_prefilled": new_prefilled > 0,
+        "resi_completed": completed,
+    }
+
+
 def reset_slot_aktif(actor: str = "admin") -> dict:
     """Reset semua slot aktif. Resi 'active'/'complete' → 'pending', slot dilepas.
 
@@ -270,7 +376,7 @@ def reset_slot_aktif(actor: str = "admin") -> dict:
         if affected:
             placeholders = ",".join("?" * len(affected))
             c.execute(
-                f"UPDATE resi_item SET quantity_fulfilled = 0 "
+                f"UPDATE resi_item SET quantity_fulfilled = 0, prefilled_qty = 0 "
                 f"WHERE resi_id IN ({placeholders})",
                 affected,
             )

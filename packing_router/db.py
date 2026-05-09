@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS resi_item (
     varian INTEGER,
     quantity_ordered INTEGER NOT NULL,
     quantity_fulfilled INTEGER DEFAULT 0,
+    prefilled_qty INTEGER DEFAULT 0,
     UNIQUE (resi_id, sku, varian)
 );
 
@@ -160,6 +161,14 @@ def get_connection(path: Optional[str] = None) -> sqlite3.Connection:
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_DDL)
+    _migrate_add_prefilled_qty(conn)
+
+
+def _migrate_add_prefilled_qty(conn: sqlite3.Connection) -> None:
+    """Idempotent migration: tambah kolom prefilled_qty kalau DB lama tidak punya."""
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(resi_item)").fetchall()}
+    if "prefilled_qty" not in cols:
+        conn.execute("ALTER TABLE resi_item ADD COLUMN prefilled_qty INTEGER DEFAULT 0")
 
 
 def reset_connection() -> None:

@@ -273,20 +273,52 @@ pakai 1 PC lain, dst).
 
 #### Mode 1 — Scan Resi (setup ke Slot Aktif)
 
-Saat kertas resi marketplace fisik datang ke meja:
+Saat kertas resi marketplace fisik datang ke meja, **1-step**:
 
 1. Scan/ketik nomor resi (mis. `SPXID060408319585`) di field "Mode 1"
 2. Sistem cari di pool DB (yang sudah disync admin dari sheet `LIST_PESANAN`)
-3. Auto-assign ke slot aktif kosong terkecil (slot 1, 2, 3, ...)
-4. **Penting**: tampilan **langsung kasih instruksi pickup buffer** kalau
-   ada SKU resi ini sudah nyangkut di buffer:
+3. Auto-assign ke slot aktif kosong terkecil
+4. Hasil:
    ```
-   RESI SPXID060408319585 → SLOT 5
+   RESI SPXID0608... → SLOT 5
    Ambil dari Buffer dulu (1 SKU):
-     SKU 445 (50pcs): ambil 5 pack dari WADAH 2 SLOT 3
+     SKU 445 (10pcs): ambil 1 pack dari WADAH 2 SLOT 3
    ```
-5. Task harvester otomatis dibuat — harvester ambil plastik dari buffer ke
-   slot aktif
+   atau, kalau buffer kosong:
+   ```
+   RESI SPXID0608... → SLOT 5
+   Belum ada SKU resi ini di buffer. Tunggu plastik di-scan lewat Mode 2.
+   ```
+
+#### SKU Sudah dari Stok Gudang (📦 Gudang button)
+
+Tim packing **biasanya sudah memasukkan plastik ke polymailer dari stok
+gudang** sebelum kertas resi sampai ke meja sortir (ditandai stabilo di
+kertas resi).
+
+Untuk tandai SKU yang sudah dari stok gudang, **klik tombol `📦 Gudang`
+per-SKU** di kartu slot di dashboard:
+
+1. Buka `/dashboard` di monitor
+2. Cari kartu slot resi-nya (mis. SLOT 5 yang baru di-setup)
+3. Buka details "Kurang (...)" → ada list SKU yang masih kurang
+4. Klik tombol **`📦 Gudang`** di samping SKU yang ada stabilo-nya
+5. Sistem set `prefilled_qty = quantity_ordered` untuk SKU itu, dan:
+   - Cancel pending harvester task untuk SKU ini di resi ini (kalau ada)
+   - SKU pindah dari list "Kurang" ke list "Stok Gudang ✓"
+   - Kalau ini SKU terakhir yang missing → resi auto-complete (slot hijau)
+
+Contoh: ResiA pesan SKUA dan SKUB.
+- Setup resi → kedua SKU masuk daftar "Kurang"
+- Klik `📦 Gudang` di SKUA → SKUA pindah ke "Stok Gudang ✓"
+- SKUB tetap di daftar Kurang — perlu di-scan dari output weeding atau
+  diambil dari buffer
+- Setelah SKUB ter-fulfill (via scan plastik) → resi otomatis complete,
+  siap di-pack
+
+**Tombol Lepas (↺)**: di section "Stok Gudang ✓", ada tombol `↺ Lepas`
+untuk un-mark (kalau salah klik). SKU balik ke daftar "Kurang", resi
+revert ke status active kalau perlu.
 
 > Kalau resi belum ada di pool: muncul error *"Resi belum ada di pool. Klik
 > Sync Sheet di /admin"*. Admin yang harus klik Sync Sheet di /admin dulu.
@@ -1104,9 +1136,14 @@ A: Bisa, kalau orangnya cukup. Modul tidak enforce role separation.
 turun karena harus pindah-pindah konteks.
 
 **Q: Stok gudang yang sudah ditandai stabilo, gimana?**
-A: Scope berikutnya. Untuk sekarang, asumsi semua plastik dari output
-weeding (produksi baru). Admin manual fetch stok gudang ke Slot Aktif
-di luar logic modul ini.
+A: **Sudah disupport** dengan tombol `📦 Gudang` per-SKU di kartu slot
+di dashboard. Setelah resi di-setup ke slot, operator klik tombol
+`📦 Gudang` di samping SKU yang ada stabilo-nya → sistem set
+`prefilled_qty = quantity_ordered` dan **tidak minta plastik fisik**
+untuk SKU itu (juga cancel pending harvester task SKU itu). SKU pindah
+ke section "Stok Gudang ✓" (info di slot card). Kalau ini SKU terakhir
+yang kurang, resi auto-complete (hijau, siap pack). Tombol `↺ Lepas`
+ada di section "Stok Gudang ✓" untuk un-mark kalau salah klik.
 
 ---
 

@@ -25,6 +25,7 @@ from ..harvester import (
 from ..maintenance import (
     cancel_resi,
     mark_resi_done,
+    mark_resi_item_prefilled,
     pack_resi,
     reset_buffer,
     reset_slot_aktif,
@@ -280,6 +281,59 @@ def create_app() -> Flask:
                     message=str(e),
                     harvester_id=harvester_id,
                     tasks=get_harvester_queue(),
+                ),
+                200,
+                _trigger("playError"),
+            )
+
+    @app.route("/slot-aktif/<int:resi_id>/details-panel", methods=["GET"])
+    def slot_details_panel(resi_id: int):
+        """Render panel detail slot (Kurang + Stok Gudang) untuk sidebar.
+        Dipanggil saat operator klik kartu slot di dashboard."""
+        slots = get_slot_aktif_match_status()
+        slot = next((s for s in slots if s.get("resi_id") == resi_id), None)
+        return render_template(
+            "partials/_slot_details_panel.html",
+            slot=slot,
+            oob=False,
+        )
+
+    @app.route("/slot-aktif/<int:resi_id>/prefill/<int:item_id>", methods=["POST"])
+    def mark_prefilled_action(resi_id: int, item_id: int):
+        """Toggle SKU 'sudah dari stok gudang' (stabilo). Response berisi:
+        - main: dashboard_grids partial (untuk #dashboard-grids)
+        - OOB: details panel partial (untuk #kurang-panel di sidebar)"""
+        actor = (request.form.get("actor") or _default_operator_id()).strip()
+        try:
+            res = mark_resi_item_prefilled(resi_id, item_id, actor=actor)
+            label = "📦 ditandai dari gudang" if res["is_prefilled"] else "↺ tanda gudang dilepas"
+            info = f"{label} — SKU {res['sku']}"
+            if res["resi_completed"]:
+                info += " — RESI LENGKAP, siap pack!"
+            match_event = "playMatch" if res["resi_completed"] else "playSetup"
+            slots = get_slot_aktif_match_status()
+            target_slot = next((s for s in slots if s.get("resi_id") == resi_id), None)
+            html = render_template(
+                "partials/_dashboard_grids.html",
+                slots=slots,
+                buffer=get_buffer_match_status(),
+                info=info,
+                kuning_min=config.SLOT_KUNING_TIMEOUT_MIN,
+            )
+            html += render_template(
+                "partials/_slot_details_panel.html",
+                slot=target_slot,
+                oob=True,
+            )
+            return html, 200, _trigger(match_event)
+        except (ResiNotFoundError, SlotAktifConflictError) as e:
+            return (
+                render_template(
+                    "partials/_dashboard_grids.html",
+                    slots=get_slot_aktif_match_status(),
+                    buffer=get_buffer_match_status(),
+                    error=str(e),
+                    kuning_min=config.SLOT_KUNING_TIMEOUT_MIN,
                 ),
                 200,
                 _trigger("playError"),

@@ -61,13 +61,13 @@ def _find_active_resi_needing_sku(
         """
         SELECT r.id AS resi_id, r.nomor_resi, r.slot_aktif_number,
                ri.id AS item_id, ri.sku, ri.varian,
-               ri.quantity_ordered, ri.quantity_fulfilled
+               ri.quantity_ordered, ri.quantity_fulfilled, ri.prefilled_qty
         FROM resi r
         JOIN resi_item ri ON ri.resi_id = r.id
         WHERE r.status = 'active'
           AND r.slot_aktif_number IS NOT NULL
           AND ri.sku = ?
-          AND ri.quantity_fulfilled < ri.quantity_ordered
+          AND (ri.quantity_ordered - COALESCE(ri.prefilled_qty, 0) - COALESCE(ri.quantity_fulfilled, 0)) > 0
         ORDER BY r.slot_aktif_number ASC, ri.id ASC
         LIMIT 1
         """,
@@ -76,14 +76,15 @@ def _find_active_resi_needing_sku(
 
 
 def _maybe_complete_resi(conn: sqlite3.Connection, resi_id: int) -> bool:
-    """Cek apakah semua resi_item sudah fulfilled. Kalau ya, transition active→complete.
-
-    Return True kalau resi baru saja transitioned ke complete.
-    """
+    """Cek apakah semua resi_item sudah fulfilled (prefilled + fulfilled >= ordered).
+    Kalau ya, transition active→complete. Return True kalau baru transitioned."""
     row = conn.execute(
         """
         SELECT
-            (SELECT COUNT(*) FROM resi_item WHERE resi_id = ? AND quantity_fulfilled < quantity_ordered) AS missing,
+            (SELECT COUNT(*) FROM resi_item
+             WHERE resi_id = ?
+               AND (quantity_ordered - COALESCE(prefilled_qty, 0) - COALESCE(quantity_fulfilled, 0)) > 0
+            ) AS missing,
             (SELECT status FROM resi WHERE id = ?) AS current_status
         """,
         (resi_id, resi_id),
