@@ -3,6 +3,9 @@
 # diawali '#' di-skip. Path subfolder pakai '/' (POSIX-style), updater
 # auto-create parent dir saat write.
 
+# === Auto-updater (self-update) ===
+updater.py
+
 # === File inti existing ===
 app.py
 duplicate_files.py

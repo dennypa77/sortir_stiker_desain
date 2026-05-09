@@ -8,6 +8,10 @@ Mekanisme:
 
 Kalau manifest gagal di-fetch (offline / 404), pakai ``FILES_TO_UPDATE``
 fallback hardcoded.
+
+Cache-bust: ``raw.githubusercontent.com`` punya cache 5 menit. Tiap fetch
+append ``?_cb=<unix_ts>`` query untuk bypass CDN cache supaya commit baru
+langsung kebaca tanpa nunggu cache expire.
 """
 import os
 import time
@@ -28,9 +32,17 @@ FILES_TO_UPDATE = [
 
 
 def _fetch_text(filename, timeout=10):
-    """Fetch file dari BASE_URL. Return bytes atau raise."""
+    """Fetch file dari BASE_URL. Return bytes atau raise.
+
+    Append ``?_cb=<unix_ts>`` untuk bust CDN cache (raw.githubusercontent.com
+    cache 5 menit by default — query unique per-run bypass cache)."""
     url = BASE_URL + filename.replace(" ", "%20").replace("\\", "/")
-    response = urllib.request.urlopen(url, timeout=timeout)
+    url += ("&" if "?" in url else "?") + "_cb=" + str(int(time.time()))
+    req = urllib.request.Request(url, headers={
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    })
+    response = urllib.request.urlopen(req, timeout=timeout)
     return response.read()
 
 
