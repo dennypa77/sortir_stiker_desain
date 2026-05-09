@@ -1,18 +1,24 @@
 /**
- * SISTEM MANAJEMEN GUDANG STIKER - V7.0
+ * SISTEM MANAJEMEN GUDANG STIKER - V8.0
  *
  * File ini adalah Google Apps Script yang harus di-paste ke editor Apps Script
  * di Google Spreadsheet (Extensions → Apps Script). File ini disimpan di repo
  * sebagai referensi versi dan dokumentasi.
  *
+ * Tambahan v8.0 (dari v7.0):
+ *   - Auto-populate sheet "Pesanan" saat upload data pesanan baru.
+ *     Sheet ini dipakai untuk menandai (stabilo) resi mana yang stoknya
+ *     tersedia di gudang (Ambil Gudang) atau perlu produksi (Produksi).
+ *   - Sheet "Pesanan" auto-cleared & ditulis ulang setiap upload baru.
+ *   - Cek stok per-baris kumulatif (FIFO): stok dikurangi tiap kali baris
+ *     ditandai "Ambil Gudang"; bila tidak cukup → "Produksi" + kekurangan.
+ *   - Sumber stok: DATABASE_STIKER kolom H (sama dengan yang dibaca app.py).
+ *
  * Tambahan v7.0 (dari v6.0):
  *   - Auto-populate sheet LIST_PESANAN saat upload BigSeller export.
- *     Deteksi kolom by header keyword (resi/tracking/awb, sku, jumlah/qty,
- *     tanggal/date), fallback ke positional 3-col / 4-col seperti v6.0.
- *   - Auto-generate Batch_ID format YYYY-MM-DD-Bn (auto-increment per hari).
- *   - Auto-set header LIST_PESANAN saat sheet pertama kali diisi.
- *   - Auto-detect marketplace dari prefix resi (Shopee/SPX/JNT/JNE/dll).
- *   - Menu item baru: "Hapus LIST_PESANAN > 10 Hari" untuk maintenance.
+ *   - Auto-generate Batch_ID format YYYY-MM-DD-Bn.
+ *   - Auto-detect marketplace dari prefix resi.
+ *   - Menu item: "Hapus LIST_PESANAN > 10 Hari" untuk maintenance.
  *
  * Cara deploy:
  *   1. Buka Google Spreadsheet → Extensions → Apps Script.
@@ -22,15 +28,24 @@
  *
  * Sheet yang dipakai:
  *   - DATA_SALES        (existing) — trend penjualan, summary harian, rolling 30 hari.
- *   - DATABASE_STIKER   (existing) — master SKU + stok gudang.
+ *   - DATABASE_STIKER   (existing) — master SKU + stok gudang (kolom H = stok aktif).
  *   - STOK_OPNAME       (existing) — input stok fisik untuk sync opname.
  *   - LOG_KELUAR        (existing) — log barang keluar (di-write app.py Python).
- *   - LIST_PESANAN      (BARU)     — detail per-resi untuk Stasiun QC.
+ *   - LIST_PESANAN      (v7.0)     — detail per-resi untuk Stasiun QC.
+ *   - Pesanan           (v8.0)     — cek stok per-resi (Ambil Gudang/Produksi).
  */
 
 const LIST_PESANAN_HEADER = [
   "Batch_ID", "Uploaded_At", "Nomor_Resi", "SKU", "Jumlah",
   "Marketplace", "Status", "QC_Operator", "QC_Completed_At", "QC_Notes"
+];
+
+const PESANAN_SHEET_NAME = "Pesanan";
+const PESANAN_HEADER = [
+  "Nomor Resi", "SKU", "JUMLAH",
+  "Nomor Resi", "SKU", "Jumlah",
+  "SKU Tanpa Pcs", "Varian", "Jumlah Pcs",
+  "Keterangan", "Kekurangan"
 ];
 
 const MARKETPLACE_PREFIXES = {
@@ -218,6 +233,7 @@ function processUploadedFile(base64Content, fileName) {
 
   const processedSales = [];
   const processedListPesanan = [];
+  const processedPesanan = [];
 
   for (let i = 1; i < rawData.length; i++) {
     const row = rawData[i];
@@ -249,12 +265,24 @@ function processUploadedFile(base64Content, fileName) {
     // (1) DATA_SALES (existing — multiplier × qty = total pcs)
     processedSales.push([tglFinal, idMaster, multiplier * qty]);
 
-    // (2) LIST_PESANAN (BARU di v7.0) — hanya kalau ada resi
+    // (2) LIST_PESANAN (v7.0) — hanya kalau ada resi
     if (resi && batchId) {
       processedListPesanan.push([
         batchId, uploadedAtStr, resi, sku, qty,
         detectMarketplace(resi), 'pending', '', '', ''
       ]);
+    }
+
+    // (3) Pesanan (v8.0) — cek stok per-resi, hanya kalau ada resi
+    if (resi) {
+      processedPesanan.push({
+        resi: resi,
+        sku: sku,
+        qty: qty,
+        idMaster: idMaster,
+        varian: multiplier,
+        jumlahPcs: multiplier * qty
+      });
     }
   }
 
@@ -265,14 +293,25 @@ function processUploadedFile(base64Content, fileName) {
     listSheet.getRange(listSheet.getLastRow() + 1, 1, processedListPesanan.length, LIST_PESANAN_HEADER.length).setValues(processedListPesanan);
   }
 
+  // Auto-rebuild sheet "Pesanan" tiap upload — clear lalu tulis ulang dengan
+  // hasil cek stok per-baris. Hanya dieksekusi kalau kolom resi terdeteksi
+  // (upload sales-only tidak akan menghapus Pesanan yang sudah ada).
+  let pesananStats = null;
+  if (idxResi >= 0) {
+    pesananStats = populatePesananSheet(processedPesanan, ss);
+  }
+
   const salesResult = manageDataSales();
   let result = "✅ " + salesResult;
   if (processedListPesanan.length > 0) {
     result += `\n+ ${processedListPesanan.length} pesanan masuk LIST_PESANAN sebagai batch ${batchId}.`;
   } else if (idxResi < 0) {
-    result += `\n(Tidak ada kolom resi terdeteksi — LIST_PESANAN tidak diupdate.)`;
+    result += `\n(Tidak ada kolom resi terdeteksi — LIST_PESANAN & Pesanan tidak diupdate.)`;
   } else if (!listSheet) {
     result += `\n⚠️ Sheet LIST_PESANAN belum dibuat — pesanan tidak diteruskan ke QC.`;
+  }
+  if (pesananStats) {
+    result += `\n+ Sheet "Pesanan" di-refresh: ${pesananStats.total} baris (Ambil Gudang ${pesananStats.ambil}, Produksi ${pesananStats.produksi}).`;
   }
   return result;
 }
@@ -426,4 +465,82 @@ function purgeOldListPesanan() {
     sheet.setFrozenRows(1);
   }
   ui.alert(`✅ Berhasil. Dihapus ${removed} baris pesanan lama (>${PURGE_DAYS} hari). Tersisa ${newRows.length - 1} pesanan aktif.`);
+}
+
+/* ============================================================
+ *  SHEET "Pesanan" — BARU di v8.0
+ *  Auto-rebuild tiap upload data pesanan baru. Cek stok per-baris
+ *  kumulatif (FIFO) terhadap DATABASE_STIKER kolom H, lalu tandai
+ *  setiap baris sebagai "Ambil Gudang" atau "Produksi".
+ * ============================================================ */
+function loadStockMap(ss) {
+  const dbSheet = ss.getSheetByName("DATABASE_STIKER");
+  const stockMap = {};
+  if (!dbSheet) return stockMap;
+  const lastRow = dbSheet.getLastRow();
+  if (lastRow < 2) return stockMap;
+  // Ambil kolom A (ID Master) dan kolom H (Stok aktif — sama dgn yg dibaca app.py)
+  const data = dbSheet.getRange(2, 1, lastRow - 1, 8).getValues();
+  for (let i = 0; i < data.length; i++) {
+    const idMaster = String(data[i][0] || '').trim();
+    if (!idMaster) continue;
+    const stok = parseFloat(data[i][7]);
+    stockMap[idMaster] = isNaN(stok) ? 0 : stok;
+  }
+  return stockMap;
+}
+
+function populatePesananSheet(orders, ss) {
+  let sheet = ss.getSheetByName(PESANAN_SHEET_NAME);
+  if (!sheet) sheet = ss.insertSheet(PESANAN_SHEET_NAME);
+
+  // Auto-delete: bersihkan isi tiap upload baru
+  sheet.clearContents();
+  sheet.clearFormats();
+
+  // Tulis header
+  sheet.getRange(1, 1, 1, PESANAN_HEADER.length).setValues([PESANAN_HEADER]);
+  sheet.getRange(1, 1, 1, PESANAN_HEADER.length)
+       .setFontWeight("bold")
+       .setBackground("#cfe2f3")
+       .setHorizontalAlignment("center");
+  sheet.setFrozenRows(1);
+
+  const stats = { total: orders.length, ambil: 0, produksi: 0 };
+  if (orders.length === 0) return stats;
+
+  // Cek stok per-baris kumulatif (FIFO)
+  const stockMap = loadStockMap(ss);
+  const rows = [];
+  const ketBackgrounds = [];
+
+  for (const o of orders) {
+    const need = o.jumlahPcs;
+    const avail = stockMap.hasOwnProperty(o.idMaster) ? stockMap[o.idMaster] : 0;
+    let keterangan, kekurangan;
+    if (avail >= need) {
+      keterangan = "Ambil Gudang";
+      kekurangan = 0;
+      stockMap[o.idMaster] = avail - need;
+      stats.ambil++;
+    } else {
+      keterangan = "Produksi";
+      kekurangan = need - avail;
+      stockMap[o.idMaster] = 0;
+      stats.produksi++;
+    }
+    rows.push([
+      o.resi, o.sku, o.qty,
+      o.resi, o.sku.toLowerCase(), o.qty,
+      o.idMaster, o.varian, need,
+      keterangan, kekurangan
+    ]);
+    ketBackgrounds.push([keterangan === "Ambil Gudang" ? "#b6d7a8" : "#f4cccc"]);
+  }
+
+  sheet.getRange(2, 1, rows.length, PESANAN_HEADER.length).setValues(rows);
+  // Highlight kolom Keterangan: hijau = Ambil Gudang, merah muda = Produksi
+  sheet.getRange(2, 10, ketBackgrounds.length, 1).setBackgrounds(ketBackgrounds);
+
+  return stats;
 }

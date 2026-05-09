@@ -27,24 +27,26 @@ CONFIG_FILE = "config.json"
 class BotApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Bot Sortir Stiker & Gudang v2.0")
+        self.title("Bot Sortir Stiker & Gudang v10.1")
         self.geometry("850x700")
-        
+
         self.config_data = self.load_config()
-        
+
         # Tabs Utama
         self.tabview = ctk.CTkTabview(self)
         self.tabview.pack(padx=20, pady=20, fill="both", expand=True)
-        
+
         self.tab1 = self.tabview.add("Koneksi Gudang")
         self.tab2 = self.tabview.add("Pengaturan File")
         self.tab3 = self.tabview.add("Eksekusi & Log")
         self.tab4 = self.tabview.add("Scanner Resi Gudang")
-        
+        self.tab5 = self.tabview.add("Cetak Kekurangan")
+
         self.setup_tab_koneksi()
         self.setup_tab_file()
         self.setup_tab_eksekusi()
         self.setup_tab_scanner()
+        self.setup_tab_kekurangan()
 
         self.gs_client = None
         self.spreadsheet = None
@@ -165,7 +167,7 @@ class BotApp(ctk.CTk):
         self.excel_frame = ctk.CTkFrame(self.tab2)
         self.excel_frame.pack(fill="x", padx=20, pady=5)
         ctk.CTkLabel(self.excel_frame, text="Data Pesanan (.xlsx):").pack(side="left", padx=10)
-        self.entry_excel = ctk.CTkEntry(self.excel_frame)
+        self.entry_excel = ctk.CTkEntry(self.excel_frame, placeholder_text="contoh: DATA-V10.xlsx (nama unik per versi bot)")
         self.entry_excel.pack(side="left", padx=10, fill="x", expand=True)
         self.entry_excel.insert(0, self.config_data.get("excel_path", ""))
         ctk.CTkButton(self.excel_frame, text="Browse", width=80, command=lambda: self.browse_path("excel")).pack(side="left", padx=10)
@@ -204,6 +206,11 @@ class BotApp(ctk.CTk):
             if path:
                 self.entry_hot.delete(0, 'end')
                 self.entry_hot.insert(0, path)
+        elif ptype == "kekurangan":
+            path = fd.askopenfilename(filetypes=[("Excel Files", "*.xlsx")])
+            if path:
+                self.entry_kekurangan.delete(0, 'end')
+                self.entry_kekurangan.insert(0, path)
 
     def save_paths(self):
         self.config_data["excel_path"] = self.entry_excel.get()
@@ -333,6 +340,260 @@ class BotApp(ctk.CTk):
         self.log_scan.tag_config("info", foreground="#adb5bd")
         self.log_scan.tag_config("hijau", foreground="#28a745")
         self.log_scan.tag_config("merah", foreground="#dc3545")
+
+    # --- TAB 5: Cetak Kekurangan Produksi ---
+    def setup_tab_kekurangan(self):
+        ctk.CTkLabel(
+            self.tab5,
+            text="Cetak Kekurangan Produksi",
+            font=("Segoe UI", 16, "bold")
+        ).pack(pady=(15, 4))
+
+        info_frame = ctk.CTkFrame(self.tab5, fg_color="#1f2937", border_width=1, border_color="#dc6803")
+        info_frame.pack(fill="x", padx=20, pady=(0, 10))
+        ctk.CTkLabel(
+            info_frame,
+            text=(
+                "Mode untuk request reprint dari tim gudang/packing kalau ada kekurangan.\n"
+                "Format Excel: kolom A = SKU (angka, mis. 445), kolom B = Jumlah Lembar (mis. 1).\n"
+                "TIDAK menyentuh DATABASE_STIKER, LOG_KELUAR, maupun Pesanan/LIST_PESANAN."
+            ),
+            font=("Segoe UI", 11),
+            text_color="#fbbf24",
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=8)
+
+        # Path Excel
+        path_frame = ctk.CTkFrame(self.tab5)
+        path_frame.pack(fill="x", padx=20, pady=5)
+        ctk.CTkLabel(path_frame, text="Excel Kekurangan (.xlsx):").pack(side="left", padx=10)
+        self.entry_kekurangan = ctk.CTkEntry(
+            path_frame,
+            placeholder_text="contoh: KEKURANGAN-V10.xlsx"
+        )
+        self.entry_kekurangan.pack(side="left", padx=10, fill="x", expand=True)
+        self.entry_kekurangan.insert(0, self.config_data.get("kekurangan_path", ""))
+        ctk.CTkButton(path_frame, text="Browse", width=80, command=lambda: self.browse_path("kekurangan")).pack(side="left", padx=5)
+        ctk.CTkButton(path_frame, text="Simpan", width=80, command=self.save_kekurangan_path).pack(side="left", padx=5)
+
+        # Action buttons
+        btn_frame = ctk.CTkFrame(self.tab5, fg_color="transparent")
+        btn_frame.pack(pady=10)
+        self.btn_kekurangan = ctk.CTkButton(
+            btn_frame,
+            text="MULAI CETAK KEKURANGAN",
+            command=self.start_thread_kekurangan,
+            height=40,
+            font=("Segoe UI", 14, "bold"),
+            fg_color="#dc6803",
+            hover_color="#b54708"
+        )
+        self.btn_kekurangan.pack(side="left", padx=10)
+
+        self.btn_open_kekurangan_output = ctk.CTkButton(
+            btn_frame,
+            text="Buka Folder Output",
+            command=self.open_output_folder,
+            height=40,
+            font=("Segoe UI", 14, "bold"),
+            fg_color="#6c757d",
+            hover_color="#5a6268"
+        )
+        self.btn_open_kekurangan_output.pack(side="left", padx=10)
+
+        # Progress
+        self.progress_kekurangan = ctk.CTkProgressBar(self.tab5)
+        self.progress_kekurangan.pack(fill="x", padx=20, pady=5)
+        self.progress_kekurangan.set(0)
+
+        # Log textbox
+        self.textbox_kekurangan = ctk.CTkTextbox(self.tab5, state="disabled")
+        self.textbox_kekurangan.pack(fill="both", expand=True, padx=20, pady=10)
+        self.textbox_kekurangan.tag_config("hijau", foreground="#28a745")
+        self.textbox_kekurangan.tag_config("merah", foreground="#dc3545")
+        self.textbox_kekurangan.tag_config("kuning", foreground="#ffc107")
+        self.textbox_kekurangan.tag_config("info", foreground="#adb5bd")
+
+    def log_kekurangan(self, msg, color="info"):
+        self.textbox_kekurangan.configure(state="normal")
+        self.textbox_kekurangan.insert("end", f"{msg}\n", color)
+        self.textbox_kekurangan.see("end")
+        self.textbox_kekurangan.configure(state="disabled")
+
+    def save_kekurangan_path(self):
+        self.config_data["kekurangan_path"] = self.entry_kekurangan.get()
+        self.save_config()
+        messagebox.showinfo("Sukses", "Path Excel kekurangan disimpan.")
+
+    def start_thread_kekurangan(self):
+        self.btn_kekurangan.configure(state="disabled")
+        self.textbox_kekurangan.configure(state="normal")
+        self.textbox_kekurangan.delete("1.0", "end")
+        self.textbox_kekurangan.configure(state="disabled")
+        self.progress_kekurangan.set(0)
+        threading.Thread(target=self.run_process_kekurangan, daemon=True).start()
+
+    def run_process_kekurangan(self):
+        self.log_kekurangan("[INFO] Mulai proses Cetak Kekurangan Produksi.", "info")
+        self.log_kekurangan("[INFO] Stok DATABASE_STIKER, LOG_KELUAR & Pesanan TIDAK akan disentuh.", "info")
+        try:
+            self.main_logic_kekurangan()
+        except Exception as e:
+            self.log_kekurangan(f"[ERROR FATAL] {str(e)}", "merah")
+        finally:
+            self.btn_kekurangan.configure(state="normal", text="CETAK KEMBALI")
+
+    def main_logic_kekurangan(self):
+        hot_folder = self.config_data.get("hot_path", "")
+        master_folder = self.config_data.get("master_path", "")
+        kekurangan_file = self.entry_kekurangan.get().strip() or self.config_data.get("kekurangan_path", "")
+
+        if not master_folder or not hot_folder:
+            self.log_kekurangan("ERROR: Set 'Folder Master PDF' dan 'Hot Folder' di tab Pengaturan File dulu.", "merah")
+            return
+        if not kekurangan_file:
+            self.log_kekurangan("ERROR: Path Excel Kekurangan belum diisi.", "merah")
+            return
+        if not os.path.exists(kekurangan_file):
+            self.log_kekurangan(f"ERROR: File Excel tidak ditemukan: {kekurangan_file}", "merah")
+            return
+        if not os.path.exists(master_folder):
+            self.log_kekurangan(f"ERROR: Master Folder tidak ditemukan: {master_folder}", "merah")
+            return
+        if not os.path.exists(hot_folder):
+            self.log_kekurangan(f"ERROR: Hot Folder tidak ditemukan: {hot_folder}", "merah")
+            return
+
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        output_dir = os.path.join(hot_folder, f"Cetak_Kekurangan_{timestamp}")
+        os.makedirs(output_dir, exist_ok=True)
+        self.log_kekurangan(f"[INFO] Folder output: {output_dir}", "info")
+
+        # Build PDF cache (sama logika dgn main flow)
+        self.log_kekurangan("[INFO] Memuat cache PDF dari Master Folder...", "info")
+        file_cache = defaultdict(list)
+        try:
+            for filename in os.listdir(master_folder):
+                if filename.lower().endswith(".pdf"):
+                    m = re.match(r'^\d+', filename)
+                    if m:
+                        file_cache[m.group(0)].append(os.path.join(master_folder, filename))
+        except Exception as e:
+            self.log_kekurangan(f"ERROR baca Master Folder: {e}", "merah")
+            return
+
+        # Read Excel
+        try:
+            wb = load_workbook(kekurangan_file, data_only=True)
+            ws = wb.active
+        except Exception as e:
+            self.log_kekurangan(f"ERROR baca Excel: {e}", "merah")
+            return
+
+        tasks = []
+        skipped = []
+        for row_idx in range(2, ws.max_row + 1):
+            sku_val = ws.cell(row_idx, 1).value
+            jml_val = ws.cell(row_idx, 2).value
+            if sku_val is None and jml_val is None:
+                continue
+            if sku_val is None or jml_val is None:
+                skipped.append((str(sku_val) if sku_val else "", str(jml_val) if jml_val else "", "Kolom kosong"))
+                continue
+            sku_str = str(sku_val).strip()
+            m = re.match(r'^(\d+)', sku_str)
+            if not m:
+                skipped.append((sku_str, str(jml_val), "SKU tidak diawali angka"))
+                continue
+            numeric_id = m.group(1)
+            try:
+                jumlah = int(jml_val)
+            except (ValueError, TypeError):
+                try:
+                    jumlah = int(float(jml_val))
+                except (ValueError, TypeError):
+                    skipped.append((sku_str, str(jml_val), "Jumlah harus angka"))
+                    continue
+            if jumlah <= 0:
+                skipped.append((sku_str, str(jml_val), "Jumlah harus > 0"))
+                continue
+            tasks.append({'sku': numeric_id, 'jumlah': jumlah, 'original': sku_str})
+
+        if not tasks:
+            self.log_kekurangan("[INFO] Tidak ada baris valid di Excel.", "merah")
+            for s in skipped[:20]:
+                self.log_kekurangan(f"   skip: {s[0]} | {s[1]} -> {s[2]}", "kuning")
+            return
+
+        self.log_kekurangan(f"[INFO] {len(tasks)} baris valid ({len(skipped)} di-skip). Mulai cetak...", "info")
+
+        success_logs = []
+        fail_logs = list(skipped)
+        total = len(tasks)
+
+        for i, task in enumerate(tasks):
+            self.progress_kekurangan.set(i / total)
+            sku = task['sku']
+            n = task['jumlah']
+
+            found_paths = file_cache.get(sku, [])
+            if not found_paths:
+                fail_logs.append((sku, str(n), "Master PDF tidak ditemukan"))
+                self.log_kekurangan(f"❌ SKU {sku}: Master PDF tidak ada", "merah")
+                continue
+
+            optimal = [p for p in found_paths if 'versioptimal' in os.path.basename(p).lower()]
+            standard = [p for p in found_paths if p not in optimal]
+            if optimal:
+                optimal.sort(key=len)
+                src, ver = optimal[0], "optimal"
+            else:
+                standard.sort(key=len)
+                src, ver = standard[0], "standard"
+
+            try:
+                with open(src, "rb") as infile:
+                    reader = PdfReader(infile)
+                    if len(reader.pages) == 0:
+                        fail_logs.append((sku, str(n), "Master PDF kosong"))
+                        self.log_kekurangan(f"❌ SKU {sku}: Master PDF kosong", "merah")
+                        continue
+                    page0 = reader.pages[0]
+                    for j in range(1, n + 1):
+                        out_name = f"{sku}-{j}.pdf" if n > 1 else f"{sku}.pdf"
+                        out_path = os.path.join(output_dir, out_name)
+                        writer = PdfWriter()
+                        writer.add_page(page0)
+                        with open(out_path, "wb") as outfile:
+                            writer.write(outfile)
+                self.log_kekurangan(f"✔ SKU {sku}: {n} lembar (versi {ver})", "hijau")
+                success_logs.append((sku, n, f"versi {ver}"))
+            except Exception as e:
+                fail_logs.append((sku, str(n), f"Error ekstrak: {e}"))
+                self.log_kekurangan(f"❌ SKU {sku}: {e}", "merah")
+
+        self.progress_kekurangan.set(1.0)
+
+        # Save log Excels
+        log_dir = os.path.join(output_dir, "log")
+        os.makedirs(log_dir, exist_ok=True)
+        if success_logs:
+            wb_s = Workbook()
+            ws_s = wb_s.active
+            ws_s.append(["SKU", "Jumlah Lembar", "Keterangan"])
+            for r in success_logs:
+                ws_s.append(r)
+            wb_s.save(os.path.join(log_dir, "berhasil.xlsx"))
+        if fail_logs:
+            wb_f = Workbook()
+            ws_f = wb_f.active
+            ws_f.append(["SKU", "Jumlah", "Keterangan"])
+            for r in fail_logs:
+                ws_f.append(r)
+            wb_f.save(os.path.join(log_dir, "gagal.xlsx"))
+
+        self.log_kekurangan(f"\n[SELESAI] {len(success_logs)} SKU sukses, {len(fail_logs)} gagal/skip.", "info")
+        self.log_kekurangan(f"[INFO] Output disimpan di: {output_dir}", "info")
 
     def print_scan_log(self, msg, color="info"):
         self.log_scan.configure(state="normal")
