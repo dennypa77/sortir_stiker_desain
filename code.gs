@@ -1,9 +1,22 @@
 /**
- * SISTEM MANAJEMEN GUDANG STIKER - V9.1
+ * SISTEM MANAJEMEN GUDANG STIKER - V10.0
  *
  * File ini adalah Google Apps Script yang harus di-paste ke editor Apps Script
  * di Google Spreadsheet (Extensions → Apps Script). File ini disimpan di repo
  * sebagai referensi versi dan dokumentasi.
+ *
+ * Tambahan v10.0 (dari v9.1):
+ *   - REWORK alur restock — sebelumnya tim PRINT yg input, sekarang tim
+ *     GUDANG yg request dan APPROVE. Tim print cuma execute.
+ *   - Sheet baru PERMINTAAN_RESTOCK (replace PRODUKSI_WIP) dgn alur:
+ *       gudang submit → print mulai → print selesai → gudang verify
+ *       fisik → gudang centang Approve checkbox → otomatis ditulis ke
+ *       LOG_MASUK + status=approved.
+ *   - onEdit trigger Apps Script handle 2 event:
+ *       (1) Gudang isi row baru (kol B/C/D) → auto-set tanggal & status pending.
+ *       (2) Gudang centang Approve (kol I) → tulis LOG_MASUK + set approved.
+ *   - Menu item baru: "Setup Sheet PERMINTAAN_RESTOCK" (sekali pakai
+ *     untuk create sheet + header + dropdown status + checkbox approve).
  *
  * Tambahan v9.1 (dari v9.0):
  *   - Status WIP di sheet "Pesanan" jadi first-class citizen (bukan cuma
@@ -52,7 +65,8 @@
  *   - LOG_KELUAR        (existing) — log barang keluar (di-write app.py Python).
  *   - LIST_PESANAN      (v7.0)     — detail per-resi untuk Stasiun QC.
  *   - Pesanan           (v8.0)     — cek stok per-resi (Ambil Gudang/Produksi/WIP).
- *   - PRODUKSI_WIP      (v9.0)     — tracking batch cetak restock yg belum masuk gudang.
+ *   - PERMINTAAN_RESTOCK (v10.0)   — request restock dari gudang, alur gudang→print→gudang approve.
+ *   - LOG_MASUK          (v10.0)   — destination final stok masuk gudang setelah approved.
  */
 
 const LIST_PESANAN_HEADER = [
@@ -68,11 +82,26 @@ const PESANAN_HEADER = [
   "Keterangan", "Kekurangan", "WIP Pcs"
 ];
 
-const WIP_SHEET_NAME = "PRODUKSI_WIP";
-const WIP_HEADER = [
-  "Tanggal_Print", "SKU", "Jumlah_Pcs", "Jumlah_Lembar",
-  "Operator", "Status", "Tanggal_Done"
+const PERMINTAAN_RESTOCK_SHEET_NAME = "PERMINTAAN_RESTOCK";
+const PERMINTAAN_RESTOCK_HEADER = [
+  "Tanggal_Request",          // A — auto-fill by onEdit saat gudang submit
+  "SKU",                      // B — gudang isi (ID Master)
+  "Jumlah_Request",           // C — gudang isi
+  "Requester",                // D — gudang isi (nama)
+  "Status",                   // E — auto/dropdown: pending/in_progress/menunggu_approval/approved/rejected/dibatalkan
+  "Tanggal_Mulai_Print",      // F — diisi app.py saat klik 'Mulai Produksi'
+  "Print_Operator",           // G — diisi app.py
+  "Jumlah_Print_Aktual",      // H — diisi app.py saat klik 'Selesai Produksi'
+  "Approve",                  // I — checkbox untuk gudang
+  "Tanggal_Approve",          // J — auto-fill onEdit saat I=TRUE
+  "Catatan"                   // K — opsional
 ];
+const RESTOCK_STATUS_VALUES = [
+  "pending", "in_progress", "menunggu_approval",
+  "approved", "rejected", "dibatalkan"
+];
+const RESTOCK_WIP_STATUSES = new Set(["pending", "in_progress", "menunggu_approval"]);
+const LOG_MASUK_SHEET_NAME = "LOG_MASUK";
 
 const MARKETPLACE_PREFIXES = {
   'SPXID': 'Shopee Express', 'SPX': 'Shopee Express',
@@ -94,7 +123,164 @@ function onOpen() {
       .addItem('3. Reset & Ringkas Data Sales', 'manageDataSales')
       .addSeparator()
       .addItem('4. Hapus LIST_PESANAN > ' + PURGE_DAYS + ' Hari', 'purgeOldListPesanan')
+      .addSeparator()
+      .addItem('5. Setup Sheet PERMINTAAN_RESTOCK', 'setupPermintaanRestockSheet')
       .addToUi();
+}
+
+/* ============================================================
+ *  PERMINTAAN_RESTOCK — Setup, onEdit, helpers (BARU di v10.0)
+ *  Alur: gudang submit di sheet → print kerjakan via app.py Tab 6
+ *        → print selesai (status menunggu_approval) → gudang centang
+ *        checkbox Approve → otomatis tulis LOG_MASUK + status=approved.
+ * ============================================================ */
+function setupPermintaanRestockSheet() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(PERMINTAAN_RESTOCK_SHEET_NAME);
+  let created = false;
+  if (!sheet) {
+    sheet = ss.insertSheet(PERMINTAAN_RESTOCK_SHEET_NAME);
+    created = true;
+  }
+
+  const numCols = PERMINTAAN_RESTOCK_HEADER.length;
+  // Header
+  sheet.getRange(1, 1, 1, numCols).setValues([PERMINTAAN_RESTOCK_HEADER]);
+  sheet.getRange(1, 1, 1, numCols)
+       .setFontWeight("bold")
+       .setBackground("#cfe2f3")
+       .setHorizontalAlignment("center");
+  sheet.setFrozenRows(1);
+
+  // Status dropdown (kol E, index 5) untuk row 2..1000
+  const statusRule = SpreadsheetApp.newDataValidation()
+      .requireValueInList(RESTOCK_STATUS_VALUES, true)
+      .setAllowInvalid(false)
+      .build();
+  sheet.getRange(2, 5, 999, 1).setDataValidation(statusRule);
+
+  // Approve checkbox (kol I, index 9) untuk row 2..1000
+  const checkboxRule = SpreadsheetApp.newDataValidation().requireCheckbox().build();
+  sheet.getRange(2, 9, 999, 1).setDataValidation(checkboxRule);
+
+  // Column widths
+  sheet.setColumnWidth(1, 160); // Tanggal_Request
+  sheet.setColumnWidth(2, 80);  // SKU
+  sheet.setColumnWidth(3, 110); // Jumlah_Request
+  sheet.setColumnWidth(4, 120); // Requester
+  sheet.setColumnWidth(5, 140); // Status
+  sheet.setColumnWidth(6, 160); // Tanggal_Mulai_Print
+  sheet.setColumnWidth(7, 130); // Print_Operator
+  sheet.setColumnWidth(8, 130); // Jumlah_Print_Aktual
+  sheet.setColumnWidth(9, 80);  // Approve
+  sheet.setColumnWidth(10, 160);// Tanggal_Approve
+  sheet.setColumnWidth(11, 200);// Catatan
+
+  ui.alert(
+    'Setup Sheet PERMINTAAN_RESTOCK',
+    (created ? 'Sheet baru dibuat.' : 'Sheet sudah ada, header/validasi di-refresh.') +
+    '\n\nAlur:\n' +
+    '1. Gudang isi kolom B (SKU), C (Jumlah_Request), D (Requester) di row baru.\n' +
+    '   → Tanggal_Request & Status=pending otomatis terisi.\n' +
+    '2. Tim print buka app.py Tab 6 → "Mulai Produksi" → status in_progress.\n' +
+    '3. Tim print selesai → "Selesai Produksi" + input jumlah aktual → status menunggu_approval.\n' +
+    '4. Gudang verifikasi fisik → centang Approve checkbox di kolom I.\n' +
+    '   → Otomatis ditulis ke LOG_MASUK + status=approved + Tanggal_Approve auto.',
+    ui.ButtonSet.OK
+  );
+}
+
+/**
+ * Simple onEdit trigger — auto-handle 2 event di sheet PERMINTAAN_RESTOCK:
+ *  (A) Gudang isi row baru (kolom B/C/D filled) → auto-set Tanggal_Request & Status=pending.
+ *  (B) Gudang centang Approve checkbox (kolom I) → tulis LOG_MASUK + set approved + Tanggal_Approve.
+ *
+ * Catatan: simple trigger jalan dgn auth user yg edit. Tulis ke sheet
+ * lain di spreadsheet yang sama (LOG_MASUK) tetap allowed.
+ */
+function onEdit(e) {
+  try {
+    if (!e || !e.range) return;
+    const sheet = e.range.getSheet();
+    if (sheet.getName() !== PERMINTAAN_RESTOCK_SHEET_NAME) return;
+
+    const row = e.range.getRow();
+    const col = e.range.getColumn();
+    if (row < 2) return; // skip header
+
+    const ss = e.source;
+    const tz = ss.getSpreadsheetTimeZone();
+    const now = Utilities.formatDate(new Date(), tz, "yyyy-MM-dd HH:mm:ss");
+
+    // --- Event A: Submit baru dari gudang (edit di kol B/C/D) ---
+    if (col >= 2 && col <= 4) {
+      const rowVals = sheet.getRange(row, 1, 1, 5).getValues()[0];
+      const tanggal = rowVals[0];
+      const sku = String(rowVals[1] || '').trim();
+      const jumlah = rowVals[2];
+      const requester = String(rowVals[3] || '').trim();
+      const status = String(rowVals[4] || '').trim();
+      // Auto-fill kalau B+C+D sudah lengkap dan A/E masih kosong
+      if (sku && jumlah !== '' && jumlah !== null && requester) {
+        if (!tanggal) sheet.getRange(row, 1).setValue(now);
+        if (!status) sheet.getRange(row, 5).setValue("pending");
+      }
+      return;
+    }
+
+    // --- Event B: Approve checkbox centang (kol I = 9) ---
+    if (col === 9) {
+      const checkboxVal = e.range.getValue();
+      if (checkboxVal !== true) return;
+
+      const rowVals = sheet.getRange(row, 1, 1, PERMINTAAN_RESTOCK_HEADER.length).getValues()[0];
+      const status = String(rowVals[4] || '').toLowerCase().trim();
+      if (status !== 'menunggu_approval') {
+        // Status belum siap di-approve — reset checkbox + warning di catatan
+        e.range.setValue(false);
+        sheet.getRange(row, 11).setValue(
+          'Approve di-skip: status saat ini "' + status + '" (perlu menunggu_approval)'
+        );
+        return;
+      }
+
+      const sku = String(rowVals[1] || '').trim();
+      const pcsAktual = parseFloat(rowVals[7]);
+      const pcsRequest = parseFloat(rowVals[2]);
+      const pcs = !isNaN(pcsAktual) && pcsAktual > 0 ? pcsAktual : pcsRequest;
+      if (!sku || isNaN(pcs) || pcs <= 0) {
+        e.range.setValue(false);
+        sheet.getRange(row, 11).setValue('Approve di-skip: SKU/jumlah tidak valid');
+        return;
+      }
+
+      // Tulis ke LOG_MASUK kolom B/C/D (kolom A Tanggal di-skip, biar formula sheet user yg fill)
+      const wsLogMasuk = ss.getSheetByName(LOG_MASUK_SHEET_NAME);
+      if (!wsLogMasuk) {
+        e.range.setValue(false);
+        sheet.getRange(row, 11).setValue(
+          'Approve di-skip: sheet ' + LOG_MASUK_SHEET_NAME + ' tidak ditemukan'
+        );
+        return;
+      }
+      const colB = wsLogMasuk.getRange("B:B").getValues();
+      let nextRow = 1;
+      for (let i = 0; i < colB.length; i++) {
+        if (colB[i][0] !== '' && colB[i][0] !== null) nextRow = i + 1;
+      }
+      nextRow = nextRow + 1;
+      if (nextRow < 2) nextRow = 2;
+      wsLogMasuk.getRange(nextRow, 2, 1, 3).setValues([[sku, pcs, "Restock oleh Sistem"]]);
+
+      // Update status & tanggal approve
+      sheet.getRange(row, 5).setValue("approved");
+      sheet.getRange(row, 10).setValue(now);
+    }
+  } catch (err) {
+    // Simple trigger: error di-suppress supaya tidak block edit user.
+    // Untuk debug: console.log(err.toString());
+  }
 }
 
 /* ============================================================
@@ -518,19 +704,23 @@ function loadStockMap(ss) {
 }
 
 function loadWipMap(ss) {
-  // Total WIP pending per SKU (untuk display di sheet Pesanan).
-  // WIP TIDAK ikut dihitung sebagai stok available — purely informasional.
-  const wipSheet = ss.getSheetByName(WIP_SHEET_NAME);
+  // Total WIP per SKU dari PERMINTAAN_RESTOCK — semua row yg statusnya
+  // masih dalam pipeline produksi (pending/in_progress/menunggu_approval).
+  // Pcs prioritize Jumlah_Print_Aktual (kol H) kalau sudah diisi, fallback ke Jumlah_Request (kol C).
+  const sheet = ss.getSheetByName(PERMINTAAN_RESTOCK_SHEET_NAME);
   const wipMap = {};
-  if (!wipSheet) return wipMap;
-  const lastRow = wipSheet.getLastRow();
+  if (!sheet) return wipMap;
+  const lastRow = sheet.getLastRow();
   if (lastRow < 2) return wipMap;
-  const data = wipSheet.getRange(2, 1, lastRow - 1, WIP_HEADER.length).getValues();
+  const data = sheet.getRange(2, 1, lastRow - 1, PERMINTAAN_RESTOCK_HEADER.length).getValues();
   for (let i = 0; i < data.length; i++) {
     const sku = String(data[i][1] || '').trim();
-    const status = String(data[i][5] || '').toLowerCase().trim();
-    const pcs = parseFloat(data[i][2]);
-    if (!sku || status !== 'pending' || isNaN(pcs)) continue;
+    const status = String(data[i][4] || '').toLowerCase().trim();
+    if (!sku || !RESTOCK_WIP_STATUSES.has(status)) continue;
+    const pcsAktual = parseFloat(data[i][7]);  // kol H Jumlah_Print_Aktual
+    const pcsRequest = parseFloat(data[i][2]); // kol C Jumlah_Request
+    const pcs = !isNaN(pcsAktual) && pcsAktual > 0 ? pcsAktual : pcsRequest;
+    if (isNaN(pcs) || pcs <= 0) continue;
     wipMap[sku] = (wipMap[sku] || 0) + pcs;
   }
   return wipMap;
