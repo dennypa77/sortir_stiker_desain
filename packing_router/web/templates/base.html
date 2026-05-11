@@ -1,23 +1,89 @@
 <!doctype html>
-<html lang="id">
+<html lang="id" data-theme="light">
 <head>
     <meta charset="utf-8">
-    <title>{% block title %}Packing Router{% endblock %}</title>
+    <title>{% block title %}Packing Router{% endblock %} · HOG Stiker</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script>
+      // Theme: hydrate BEFORE paint to avoid flash
+      (function () {
+        try {
+          var saved = localStorage.getItem('pr-theme');
+          var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          var theme = saved || (prefersDark ? 'dark' : 'light');
+          document.documentElement.setAttribute('data-theme', theme);
+        } catch (e) {}
+      })();
+    </script>
 </head>
 <body>
 <header>
-    <h1>Packing Router — HOG Stiker Desain</h1>
-    <nav>
-        <a href="{{ url_for('dashboard_view') }}">Dashboard</a>
-        <a href="{{ url_for('operator_scan_view') }}">Operator Scan</a>
-        <a href="{{ url_for('admin_view') }}">Admin</a>
+    <div class="brand">
+        <div class="brand-mark">📦</div>
+        <div>
+            <h1>Packing Router</h1>
+            <small>HOG Stiker Desain</small>
+        </div>
+    </div>
+    <nav class="main-nav">
+        <a href="{{ url_for('dashboard_view') }}"
+           class="{% if request.endpoint == 'dashboard_view' %}active{% endif %}">Dashboard</a>
+        <a href="{{ url_for('operator_scan_view') }}"
+           class="{% if request.endpoint == 'operator_scan_view' %}active{% endif %}">Operator Scan</a>
+        <a href="{{ url_for('admin_view') }}"
+           class="{% if request.endpoint == 'admin_view' %}active{% endif %}">Admin</a>
     </nav>
+    <div class="header-meta">
+        {% block header_stats %}{% endblock %}
+        <div class="stat-pill" id="header-clock" title="Waktu lokal">
+            <span class="stat-value" id="clock-time">--:--</span>
+            <span class="stat-label">WIB</span>
+        </div>
+        <button class="theme-toggle" id="theme-toggle" type="button"
+                aria-label="Toggle dark mode" title="Toggle dark mode">
+            <span id="theme-icon">🌙</span>
+        </button>
+    </div>
 </header>
 <main>
     {% block content %}{% endblock %}
 </main>
+
+<script>
+  // Theme toggle
+  (function () {
+    var btn = document.getElementById('theme-toggle');
+    var icon = document.getElementById('theme-icon');
+    function setIcon() {
+      icon.textContent = document.documentElement.getAttribute('data-theme') === 'dark' ? '☀️' : '🌙';
+    }
+    setIcon();
+    btn.addEventListener('click', function () {
+      var cur = document.documentElement.getAttribute('data-theme');
+      var next = cur === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      try { localStorage.setItem('pr-theme', next); } catch (e) {}
+      setIcon();
+    });
+  })();
+
+  // Live clock
+  (function () {
+    var el = document.getElementById('clock-time');
+    function tick() {
+      var d = new Date();
+      var hh = String(d.getHours()).padStart(2, '0');
+      var mm = String(d.getMinutes()).padStart(2, '0');
+      el.textContent = hh + ':' + mm;
+    }
+    tick();
+    setInterval(tick, 30000);
+  })();
+</script>
 </body>
 </html>

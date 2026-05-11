@@ -1,18 +1,34 @@
 {% extends "base.html" %}
 {% block title %}Dashboard{% endblock %}
+
+{% block header_stats %}
+<div class="stat-pill" title="Total slot aktif">
+    <span class="stat-value">{{ slot_count }}</span>
+    <span class="stat-label">SLOT</span>
+</div>
+<div class="stat-pill {% if tasks|length > 0 %}urgent{% endif %}" title="Antrian harvester">
+    <span class="stat-value">{{ tasks|length }}</span>
+    <span class="stat-label">QUEUE</span>
+</div>
+<div class="stat-pill" title="Operator">
+    <span class="stat-value" style="font-size: 0.85rem;">{{ operator_id }}</span>
+    <span class="stat-label">OP</span>
+</div>
+{% endblock %}
+
 {% block content %}
 <div class="dash-layout">
     <div class="dash-main">
         <section class="panel">
             <div class="panel-header">
-                <h2>Slot Aktif (Resi) — {{ slot_count }} slot</h2>
-                <small style="color:#64748b;">
-                    🔴 merah = ada SKU belum di-scan &middot;
-                    🟡 kuning = semua SKU tersentuh, qty kurang &middot;
-                    🟢 hijau = siap pack &middot;
-                    🔵 biru = &gt; {{ kuning_min }} mnt menunggu pack &middot;
-                    ⚪ kosong = belum ada resi
-                </small>
+                <h2>Slot Aktif — Resi</h2>
+                <div class="legend">
+                    <span class="legend-chip"><span class="legend-dot" style="background: var(--danger);"></span> Kurang scan</span>
+                    <span class="legend-chip"><span class="legend-dot" style="background: var(--warning);"></span> Qty kurang</span>
+                    <span class="legend-chip"><span class="legend-dot" style="background: var(--success);"></span> Siap pack</span>
+                    <span class="legend-chip"><span class="legend-dot" style="background: var(--accent);"></span> &gt; {{ kuning_min }}m</span>
+                    <span class="legend-chip"><span class="legend-dot" style="background: var(--border-strong); border: 1px dashed var(--border-strong);"></span> Kosong</span>
+                </div>
             </div>
             <div id="dashboard-grids">
                 {% include 'partials/_dashboard_grids.html' %}
@@ -25,87 +41,93 @@
     </div>
 
     <aside class="dash-side">
-        {% include 'partials/_slot_details_panel.html' %}
-
-        <div class="panel">
-            <div class="mode-tabs">
-                <button class="mode-tab active" data-mode="setup">Setup Resi</button>
-                <button class="mode-tab" data-mode="scan">Scan SKU</button>
-                <button class="mode-tab" data-mode="harvest">Pickup Buffer</button>
+        <section class="panel" style="padding: var(--space-3) var(--space-4);">
+            <div class="mode-tabs" role="tablist" aria-label="Mode operasi">
+                <button class="mode-tab active" data-mode="setup" role="tab">📋 Setup Resi</button>
+                <button class="mode-tab" data-mode="scan" role="tab">🔢 Scan SKU</button>
+                <button class="mode-tab" data-mode="harvest" role="tab">📦 Pickup</button>
             </div>
 
-            <div class="mode-pane mode-setup active">
+            <div class="mode-pane mode-setup active" role="tabpanel">
+                <div class="mode-label">Scan kertas resi marketplace</div>
                 <form hx-post="{{ url_for('operator_setup_resi') }}"
                       hx-target="#side-result"
                       hx-swap="innerHTML"
                       hx-on::after-request="this.querySelector('input[name=nomor_resi]').value=''; this.querySelector('input[name=nomor_resi]').focus();">
                     <input type="hidden" name="operator_id" value="{{ operator_id }}">
-                    <div style="display:flex; gap:0.3rem;">
+                    <div style="display:flex; gap:var(--space-2);">
                         <input type="text" name="nomor_resi" autofocus
-                               autocomplete="off" placeholder="Scan/ketik nomor resi"
+                               autocomplete="off" placeholder="Scan nomor resi..."
                                class="big-input" style="flex:1;">
-                        <button type="submit">Setup</button>
+                        <button type="submit" class="btn-primary">Setup</button>
                     </div>
                 </form>
             </div>
 
-            <div class="mode-pane mode-scan" style="display:none;">
+            <div class="mode-pane mode-scan" style="display:none;" role="tabpanel">
+                <div class="mode-label">Scan barcode plastik (output weeding)</div>
                 <form hx-post="{{ url_for('operator_scan_submit') }}"
                       hx-target="#side-result"
                       hx-swap="innerHTML"
                       hx-on::after-request="this.querySelector('input[name=barcode]').value=''; this.querySelector('input[name=barcode]').focus();">
                     <input type="hidden" name="operator_id" value="{{ operator_id }}">
-                    <div style="display:flex; gap:0.3rem; align-items:stretch;">
+                    <div style="display:flex; gap:var(--space-2); align-items:stretch;">
                         <input type="text" name="barcode" autocomplete="off"
-                               placeholder="Scan barcode plastik (e.g. 445)"
+                               placeholder="Scan plastik (e.g. 445)"
                                class="big-input" style="flex:1;">
-                        <button type="submit">Scan</button>
+                        <button type="submit" class="btn-primary">Scan</button>
                         <button type="button"
                                 hx-post="{{ url_for('operator_undo') }}"
                                 hx-include="closest form"
                                 hx-target="#side-result"
                                 hx-swap="innerHTML"
                                 class="btn-undo"
-                                title="Undo scan terakhir (window {{ undo_window }} detik)">
-                            Undo {{ undo_window }}s
+                                title="Undo scan terakhir ({{ undo_window }}s)">
+                            ↶ {{ undo_window }}s
                         </button>
                     </div>
                 </form>
             </div>
 
-            <div class="mode-pane mode-harvest" style="display:none;">
-                <h4 style="margin: 0.4rem 0 0.2rem 0;">1) Pickup di buffer</h4>
+            <div class="mode-pane mode-harvest" style="display:none;" role="tabpanel">
+                <div class="mode-label">1. Pickup di buffer</div>
                 <form hx-post="{{ url_for('harvester_pickup') }}"
                       hx-target="#side-result"
                       hx-swap="innerHTML"
                       hx-on::after-request="this.querySelector('input[name=barcode]').value=''; this.querySelector('input[name=barcode]').focus();">
                     <input type="hidden" name="harvester_id" value="{{ operator_id }}">
-                    <div style="display:flex; gap:0.3rem;">
+                    <div style="display:flex; gap:var(--space-2);">
                         <input type="text" name="barcode" autocomplete="off"
                                placeholder="Scan plastik di buffer" class="big-input" style="flex:1;">
-                        <button type="submit">Pickup</button>
+                        <button type="submit" class="btn-primary">Pickup</button>
                     </div>
                 </form>
-                <h4 style="margin: 0.6rem 0 0.2rem 0;">2) Dropoff di slot aktif</h4>
+                <div class="mode-label" style="margin-top: var(--space-3);">2. Dropoff di slot aktif</div>
                 <form hx-post="{{ url_for('harvester_dropoff') }}"
                       hx-target="#side-result"
                       hx-swap="innerHTML"
                       hx-on::after-request="this.querySelector('input[name=barcode]').value=''; this.querySelector('input[name=barcode]').focus();">
                     <input type="hidden" name="harvester_id" value="{{ operator_id }}">
-                    <div style="display:flex; gap:0.3rem;">
+                    <div style="display:flex; gap:var(--space-2);">
                         <input type="number" name="slot_aktif_number" placeholder="Slot #" min="1" required style="width:5rem;">
                         <input type="text" name="barcode" autocomplete="off"
-                               placeholder="Scan plastik lagi" class="big-input" style="flex:1;">
-                        <button type="submit">Dropoff</button>
+                               placeholder="Scan plastik" class="big-input" style="flex:1;">
+                        <button type="submit" class="btn-primary">Dropoff</button>
                     </div>
                 </form>
             </div>
 
-            <div id="side-result" style="margin-top: 0.6rem;"></div>
-        </div>
+            <div id="side-result" style="margin-top: var(--space-3);"></div>
+        </section>
 
-        <div class="panel">
-            <h3>Antrian Harvester ({{ tasks|length }})</h3>
+        {% include 'partials/_slot_details_panel.html' %}
+
+        <section class="panel">
+            <div class="panel-header">
+                <h3>Antrian Harvester</h3>
+                <span class="legend-chip">{{ tasks|length }} task</span>
+            </div>
+            {% if tasks %}
             <table class="task-table compact">
                 <thead><tr><th>#</th><th>Status</th><th>SKU</th><th>Dari</th><th>Ke</th></tr></thead>
                 <tbody>
@@ -117,12 +139,17 @@
                         <td>{{ t.buffer_label }}</td>
                         <td>SLOT {{ t.target_slot_aktif_number }}</td>
                     </tr>
-                    {% else %}
-                    <tr><td colspan="5"><em>Tidak ada task aktif</em></td></tr>
                     {% endfor %}
                 </tbody>
             </table>
-        </div>
+            {% else %}
+            <div class="empty-state" style="padding: var(--space-4) var(--space-2);">
+                <div class="empty-state-icon">✓</div>
+                <div class="empty-state-title">Tidak ada task</div>
+                <div class="empty-state-hint">Semua harvester task selesai</div>
+            </div>
+            {% endif %}
+        </section>
     </aside>
 </div>
 
@@ -158,7 +185,6 @@
             });
         } catch (e) { /* audio unavailable, fail silently */ }
     }
-    // Unlock audio context pada first user interaction (browser autoplay policy)
     document.addEventListener('click', function unlockAudio() {
         if (playSound.ctx && playSound.ctx.state === 'suspended') playSound.ctx.resume();
     }, { once: false });
@@ -186,17 +212,34 @@
         });
     });
 
+    // === Keyboard shortcuts ===
+    document.addEventListener('keydown', function (e) {
+        // Skip kalau user lagi ketik di input field
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+            // Esc untuk clear input fokus
+            if (e.key === 'Escape') {
+                e.target.value = '';
+                e.target.blur();
+            }
+            return;
+        }
+        // Alt + 1/2/3 untuk switch mode
+        if (e.altKey && ['1', '2', '3'].indexOf(e.key) !== -1) {
+            e.preventDefault();
+            var idx = parseInt(e.key) - 1;
+            var btn = document.querySelectorAll('.mode-tab')[idx];
+            if (btn) btn.click();
+        }
+    });
+
     function applyMatchHighlight() {
         document.querySelectorAll('.cell-active').forEach(function(el) { el.classList.remove('cell-active'); });
         document.querySelectorAll('.cell-match').forEach(function(el) { el.classList.remove('cell-match'); });
     }
 
-    // Klik slot/buffer cell → highlight match SKU + (kalau ada resi_id) load
-    // detail panel di sidebar.
     document.addEventListener('click', function(ev) {
-        // Skip kalau klik tombol (form submit) dalam slot card
         if (ev.target.closest('button, form')) {
-            // Tetap lanjut untuk highlight, tapi jangan fetch panel
+            // Klik button — tetap lanjut untuk highlight, tapi jangan fetch panel
         }
         var el = ev.target.closest('[data-skus]');
         if (!el) {
@@ -216,7 +259,6 @@
             });
         }
 
-        // Load detail panel kalau slot ini punya resi
         var resiId = el.getAttribute('data-resi-id');
         if (resiId && window.htmx) {
             try {

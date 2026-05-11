@@ -1,32 +1,32 @@
 {% if error %}
-    <div class="alert alert-error">{{ error }}</div>
+    <div class="alert alert-error">⚠ {{ error }}</div>
 {% elif info %}
-    <div class="alert alert-info">{{ info }}</div>
+    <div class="alert alert-info">ℹ {{ info }}</div>
 {% elif result %}
     <div class="scan-instruction scan-{{ result.action }}">
         <div class="scan-label">{{ result.target_label }}</div>
         <div class="scan-meta">
             SKU: <code>{{ result.sku }}</code>
-            {% if result.varian %}({{ result.varian }} pcs){% endif %}
+            {% if result.varian %}<span class="text-subtle">· {{ result.varian }} pcs</span>{% endif %}
         </div>
         {% if result.action == 'place_in_buffer_existing' and result.existing_plastik_count %}
-        <div class="scan-meta">Slot sekarang berisi: {{ result.existing_plastik_count }} pack</div>
+        <div class="scan-meta">Slot sekarang berisi: <strong>{{ result.existing_plastik_count }}</strong> pack</div>
         {% endif %}
         {% if result.extra and result.extra.resi_completed %}
-        <div class="scan-meta scan-complete">✔ RESI LENGKAP — siap di-pack</div>
+        <div class="scan-complete">✔ RESI LENGKAP — siap di-pack</div>
         {% endif %}
     </div>
 {% endif %}
 
-<h3>5 scan terakhir</h3>
+<h3 style="font-size: var(--fs-sm); text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-subtle); margin: var(--space-3) 0 var(--space-2) 0;">5 Scan Terakhir</h3>
 <ul class="scan-history">
     {% for h in history %}
     <li>
-        <small>{{ h.created_at }}</small>
+        <small class="text-subtle">{{ h.created_at }}</small>
         <span class="scan-event-type scan-event-{{ h.event_type }}">{{ h.event_type }}</span>
         <span class="scan-summary">{{ h.summary }}</span>
     </li>
     {% else %}
-    <li><em>Belum ada riwayat</em></li>
+    <li class="text-subtle"><em>Belum ada riwayat scan</em></li>
     {% endfor %}
 </ul>

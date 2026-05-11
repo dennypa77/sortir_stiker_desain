@@ -4,50 +4,49 @@
    slot: dict dari get_slot_aktif_match_status() untuk slot yang di-klik
         (None kalau tidak ada slot yang di-pilih)
    oob: True kalau di-render sebagai out-of-band swap. #}
-<div id="kurang-panel" class="panel kurang-panel"{% if oob %} hx-swap-oob="true"{% endif %}>
+<section id="kurang-panel" class="panel kurang-panel"{% if oob %} hx-swap-oob="true"{% endif %}>
     {% if not slot or not slot.resi_id %}
-        <h3 style="margin: 0 0 0.4rem 0;">Detail Slot</h3>
-        <p style="color:#94a3b8; font-size:0.85rem; margin:0;">
-            Klik kartu slot di grid untuk lihat detail SKU yang kurang
-            & yang sudah dari stok gudang.
-        </p>
+        <div class="panel-header">
+            <h3>Detail Slot</h3>
+        </div>
+        <div class="empty-state" style="padding: var(--space-4) var(--space-2);">
+            <div class="empty-state-icon">👆</div>
+            <div class="empty-state-title">Pilih slot untuk lihat detail</div>
+            <div class="empty-state-hint">Klik kartu slot di grid kiri untuk lihat SKU kurang & yang sudah dari stok gudang</div>
+        </div>
     {% else %}
-        <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:0.4rem;">
-            <h3 style="margin:0;">SLOT {{ slot.slot_number }}</h3>
-            <span style="font-size:0.8rem; color:#475569;">
-                <code>{{ slot.nomor_resi }}</code>
-            </span>
+        <div class="panel-header">
+            <h3>SLOT {{ slot.slot_number }}</h3>
+            <code class="text-mono" style="font-size: var(--fs-sm);">{{ slot.nomor_resi }}</code>
         </div>
 
         {% if slot.missing %}
-        <div style="margin-bottom: 0.6rem;">
-            <h4 style="margin:0 0 0.3rem 0; color:#b91c1c; font-size:0.9rem;">
-                Kurang ({{ slot.missing|length }})
-            </h4>
+        <div style="margin-bottom: var(--space-3);">
+            <h4 style="color: var(--danger);">⚠ Kurang ({{ slot.missing|length }})</h4>
             <ul style="list-style:none; padding:0; margin:0;">
                 {% for m in slot.missing %}
-                <li style="padding:0.4rem; border:1px solid #fecaca; border-radius:0.25rem; margin-bottom:0.3rem; background:#fef2f2;">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <code style="font-weight:bold;">{{ m.sku }}</code>
-                        <small style="color:#475569;">{{ m.varian }}pcs</small>
+                <li class="kurang-item kurang-item-missing">
+                    <div class="kurang-item-head">
+                        <code style="font-weight:700;">{{ m.sku }}</code>
+                        <small class="text-subtle">{{ m.varian }}pcs</small>
                     </div>
-                    <div style="font-size:0.8rem; color:#475569; margin-top:0.15rem;">
+                    <div style="font-size: var(--fs-sm); margin-top: var(--space-1); color: var(--text-muted);">
                         {% if m.untouched %}
-                            <strong style="color:#dc2626;">BELUM DI-SCAN</strong>
+                            <strong style="color: var(--danger);">BELUM DI-SCAN</strong>
                             ({{ m.ordered_pcs }}pcs)
                         {% else %}
                             ✓ {{ m.fulfilled_pcs }}/{{ m.ordered_pcs }} pcs
                             ({{ m.fulfilled }}/{{ m.ordered }} pack)
                         {% endif %}
-                        {% if m.in_buffer %}<span class="match-tag" style="margin-left:0.3rem;">📦 di buffer</span>{% endif %}
+                        {% if m.in_buffer %}<span class="match-tag">📦 di buffer</span>{% endif %}
                     </div>
                     {% if m.item_id %}
                     <form hx-post="{{ url_for('mark_prefilled_action', resi_id=slot.resi_id, item_id=m.item_id) }}"
                           hx-target="#dashboard-grids" hx-swap="innerHTML"
-                          style="margin-top:0.3rem;">
+                          style="margin-top: var(--space-2);">
                         <button type="submit"
-                                title="Tandai SKU ini sudah dari stok gudang (stabilo) — sistem tidak akan minta plastik fisik untuk SKU ini"
-                                style="font-size:0.78rem; padding:0.25rem 0.5rem; background:#fef3c7; color:#92400e; border:1px solid #fbbf24; border-radius:0.25rem; cursor:pointer; width:100%;">
+                                title="Tandai SKU ini sudah dari stok gudang"
+                                style="width:100%; background: var(--warning-soft); color: var(--warning-soft-text); border-color: var(--warning);">
                             📦 Sudah dari Gudang
                         </button>
                     </form>
@@ -60,27 +59,23 @@
 
         {% if slot.prefilled %}
         <div>
-            <h4 style="margin:0 0 0.3rem 0; color:#166534; font-size:0.9rem;">
-                Stok Gudang ✓ ({{ slot.prefilled|length }})
-            </h4>
+            <h4 style="color: var(--success);">✓ Stok Gudang ({{ slot.prefilled|length }})</h4>
             <ul style="list-style:none; padding:0; margin:0;">
                 {% for p in slot.prefilled %}
-                <li style="padding:0.4rem; border:1px solid #bbf7d0; border-radius:0.25rem; margin-bottom:0.3rem; background:#f0fdf4;">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <code style="font-weight:bold;">{{ p.sku }}</code>
-                        <small style="color:#475569;">{{ p.varian }}pcs</small>
+                <li class="kurang-item kurang-item-prefilled">
+                    <div class="kurang-item-head">
+                        <code style="font-weight:700;">{{ p.sku }}</code>
+                        <small class="text-subtle">{{ p.varian }}pcs</small>
                     </div>
-                    <div style="font-size:0.8rem; color:#166534; margin-top:0.15rem;">
+                    <div style="font-size: var(--fs-sm); margin-top: var(--space-1); color: var(--success);">
                         ✓ {{ p.ordered_pcs }}pcs sudah dari stok
                     </div>
                     {% if p.item_id %}
                     <form hx-post="{{ url_for('mark_prefilled_action', resi_id=slot.resi_id, item_id=p.item_id) }}"
                           hx-target="#dashboard-grids" hx-swap="innerHTML"
                           hx-confirm="Lepas tanda 'dari Gudang' untuk SKU {{ p.sku }}?"
-                          style="margin-top:0.3rem;">
-                        <button type="submit"
-                                title="Lepas tanda gudang"
-                                style="font-size:0.78rem; padding:0.25rem 0.5rem; background:#e2e8f0; color:#475569; border:1px solid #94a3b8; border-radius:0.25rem; cursor:pointer; width:100%;">
+                          style="margin-top: var(--space-2);">
+                        <button type="submit" title="Lepas tanda gudang" style="width:100%;">
                             ↺ Lepas Tanda Gudang
                         </button>
                     </form>
@@ -92,9 +87,11 @@
         {% endif %}
 
         {% if not slot.missing and not slot.prefilled %}
-        <p style="color:#94a3b8; font-size:0.85rem; margin:0;">
-            Slot ini sudah lengkap atau kosong.
-        </p>
+        <div class="empty-state" style="padding: var(--space-4) var(--space-2);">
+            <div class="empty-state-icon">✓</div>
+            <div class="empty-state-title">Slot lengkap</div>
+            <div class="empty-state-hint">Tidak ada SKU yang kurang</div>
+        </div>
         {% endif %}
     {% endif %}
-</div>
+</section>

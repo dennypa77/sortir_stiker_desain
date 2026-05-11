@@ -1,5 +1,5 @@
-{% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
-{% if info %}<div class="alert alert-info">{{ info }}</div>{% endif %}
+{% if error %}<div class="alert alert-error">⚠ {{ error }}</div>{% endif %}
+{% if info %}<div class="alert alert-info">ℹ {{ info }}</div>{% endif %}
 
 <div class="grid-aktif">
     {% for s in slots %}
@@ -11,53 +11,63 @@
         {% if s.resi_id %}
             <div class="cell-resi">{{ s.nomor_resi }}</div>
             <div class="cell-status">{{ s.status|upper }}</div>
-            {% if s.minutes_waiting is not none %}<small>{{ s.minutes_waiting }} mnt</small>{% endif %}
-            <div class="cell-summary" style="font-size:0.7rem; margin-top:0.15rem;">
-                {% if s.missing %}<span style="color:#b91c1c;">⚠ {{ s.missing|length }} kurang</span>{% endif %}
-                {% if s.prefilled %}<span style="color:#166534; margin-left:0.3rem;">📦 {{ s.prefilled|length }}</span>{% endif %}
+            {% if s.minutes_waiting is not none %}
+                <div class="cell-meta">
+                    <span title="Menit menunggu pack">⏱ {{ s.minutes_waiting }}m</span>
+                </div>
+            {% endif %}
+            <div class="cell-summary">
+                {% if s.missing %}<span style="color:var(--danger);">⚠ {{ s.missing|length }} kurang</span>{% endif %}
+                {% if s.prefilled %}<span style="color:var(--success);">📦 {{ s.prefilled|length }}</span>{% endif %}
             </div>
-            {% if s.match_skus and s.status in ('merah', 'kuning') %}
-            <form hx-post="{{ url_for('quick_harvest_action', resi_id=s.resi_id) }}"
-                  hx-target="#dashboard-grids" hx-swap="innerHTML">
-                <button type="submit" class="btn-quick-harvest"
-                        title="Auto-pindah {{ s.match_skus|length }} SKU dari buffer ke slot ini">
-                    ⚡ Ambil
-                </button>
-            </form>
-            {% endif %}
-            {% if s.status == 'kuning' %}
-            <form hx-post="{{ url_for('mark_done_action', resi_id=s.resi_id) }}"
-                  hx-target="#dashboard-grids" hx-swap="innerHTML"
-                  hx-confirm="Mark resi {{ s.nomor_resi }} sebagai DONE? Semua SKU sudah ada walau qty mungkin kurang.">
-                <button type="submit" class="btn-done"
-                        title="Force complete (1 plastik bisa berisi banyak pcs sekaligus)">
-                    ✓ Done
-                </button>
-            </form>
-            {% endif %}
-            {% if s.status in ('hijau', 'biru') %}
-            <form hx-post="{{ url_for('pack_resi_action', resi_id=s.resi_id) }}"
-                  hx-target="#dashboard-grids" hx-swap="innerHTML">
-                <button type="submit" class="btn-pack">PACK</button>
-            </form>
-            {% endif %}
-            <form hx-post="{{ url_for('cancel_resi_action', resi_id=s.resi_id) }}"
-                  hx-target="#dashboard-grids" hx-swap="innerHTML"
-                  hx-confirm="Cancel resi {{ s.nomor_resi }}?">
-                <button type="submit" class="btn-cancel">×</button>
-            </form>
+            <div class="cell-actions">
+                {% if s.match_skus and s.status in ('merah', 'kuning') %}
+                <form hx-post="{{ url_for('quick_harvest_action', resi_id=s.resi_id) }}"
+                      hx-target="#dashboard-grids" hx-swap="innerHTML">
+                    <button type="submit" class="btn-quick-harvest"
+                            title="Auto-pindah {{ s.match_skus|length }} SKU dari buffer ke slot ini">
+                        ⚡ Ambil
+                    </button>
+                </form>
+                {% endif %}
+                {% if s.status == 'kuning' %}
+                <form hx-post="{{ url_for('mark_done_action', resi_id=s.resi_id) }}"
+                      hx-target="#dashboard-grids" hx-swap="innerHTML"
+                      hx-confirm="Mark resi {{ s.nomor_resi }} sebagai DONE? Semua SKU sudah ada walau qty mungkin kurang.">
+                    <button type="submit" class="btn-done"
+                            title="Force complete (1 plastik bisa berisi banyak pcs sekaligus)">
+                        ✓ Done
+                    </button>
+                </form>
+                {% endif %}
+                {% if s.status in ('hijau', 'biru') %}
+                <form hx-post="{{ url_for('pack_resi_action', resi_id=s.resi_id) }}"
+                      hx-target="#dashboard-grids" hx-swap="innerHTML">
+                    <button type="submit" class="btn-pack">PACK</button>
+                </form>
+                {% endif %}
+                <form hx-post="{{ url_for('cancel_resi_action', resi_id=s.resi_id) }}"
+                      hx-target="#dashboard-grids" hx-swap="innerHTML"
+                      hx-confirm="Cancel resi {{ s.nomor_resi }}?">
+                    <button type="submit" class="btn-cancel" title="Cancel resi">×</button>
+                </form>
+            </div>
         {% else %}
-            <div class="cell-empty">kosong</div>
+            <div class="cell-empty">— kosong —</div>
         {% endif %}
     </div>
     {% endfor %}
 </div>
 
-<h3 style="margin: 1rem 0 0.5rem 0;">Buffer ({{ buffer.wadahs|length }} wadah)</h3>
+<div class="panel-header" style="margin-top: var(--space-5);">
+    <h3>Buffer Plastik</h3>
+    <span class="legend-chip">{{ buffer.wadahs|length }} wadah</span>
+</div>
+{% if buffer.wadahs %}
 <div class="buffer-wrap">
     {% for w in buffer.wadahs %}
     <div class="buffer-wadah">
-        <div class="buffer-wadah-label">WADAH {{ w.nomor }}</div>
+        <div class="buffer-wadah-label">Wadah {{ w.nomor }}</div>
         <div class="grid-buffer">
             {% for s in w.slots %}
             <div class="cell cell-buffer {% if s.sku %}cell-buffer-filled{% else %}cell-buffer-empty{% endif %} {% if s.has_match %}has-match{% endif %} {% if s.is_overflow %}cell-overflow{% endif %}"
@@ -83,3 +93,10 @@
     </div>
     {% endfor %}
 </div>
+{% else %}
+<div class="empty-state">
+    <div class="empty-state-icon">📦</div>
+    <div class="empty-state-title">Belum ada wadah buffer</div>
+    <div class="empty-state-hint">Tambah wadah di tab Admin untuk mulai sortir overflow plastik</div>
+</div>
+{% endif %}
