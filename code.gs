@@ -1,9 +1,19 @@
 /**
- * SISTEM MANAJEMEN GUDANG STIKER - V8.0
+ * SISTEM MANAJEMEN GUDANG STIKER - V9.0
  *
  * File ini adalah Google Apps Script yang harus di-paste ke editor Apps Script
  * di Google Spreadsheet (Extensions → Apps Script). File ini disimpan di repo
  * sebagai referensi versi dan dokumentasi.
+ *
+ * Tambahan v9.0 (dari v8.0):
+ *   - Integrasi sheet PRODUKSI_WIP (work-in-progress). Saat hasil cetak
+ *     restock belum masuk rak gudang (masih cutting/weeding), tim print
+ *     catat ke sheet WIP via app.py Tab 6 "Restock Produksi". Stok aktif
+ *     belum di-update; tapi info WIP muncul di sheet "Pesanan" supaya
+ *     operator tahu jangan double-print.
+ *   - Sheet "Pesanan" dapat kolom L baru: "WIP Pcs" (total pending WIP
+ *     per SKU). Keterangan "Produksi" akan ditambah tag "(WIP {N} ada)"
+ *     kalau ada WIP pending untuk SKU itu.
  *
  * Tambahan v8.0 (dari v7.0):
  *   - Auto-populate sheet "Pesanan" saat upload data pesanan baru.
@@ -32,7 +42,8 @@
  *   - STOK_OPNAME       (existing) — input stok fisik untuk sync opname.
  *   - LOG_KELUAR        (existing) — log barang keluar (di-write app.py Python).
  *   - LIST_PESANAN      (v7.0)     — detail per-resi untuk Stasiun QC.
- *   - Pesanan           (v8.0)     — cek stok per-resi (Ambil Gudang/Produksi).
+ *   - Pesanan           (v8.0)     — cek stok per-resi (Ambil Gudang/Produksi/WIP).
+ *   - PRODUKSI_WIP      (v9.0)     — tracking batch cetak restock yg belum masuk gudang.
  */
 
 const LIST_PESANAN_HEADER = [
@@ -45,7 +56,13 @@ const PESANAN_HEADER = [
   "Nomor Resi", "SKU", "JUMLAH",
   "Nomor Resi", "SKU", "Jumlah",
   "SKU Tanpa Pcs", "Varian", "Jumlah Pcs",
-  "Keterangan", "Kekurangan"
+  "Keterangan", "Kekurangan", "WIP Pcs"
+];
+
+const WIP_SHEET_NAME = "PRODUKSI_WIP";
+const WIP_HEADER = [
+  "Tanggal_Print", "SKU", "Jumlah_Pcs", "Jumlah_Lembar",
+  "Operator", "Status", "Tanggal_Done"
 ];
 
 const MARKETPLACE_PREFIXES = {
@@ -490,6 +507,25 @@ function loadStockMap(ss) {
   return stockMap;
 }
 
+function loadWipMap(ss) {
+  // Total WIP pending per SKU (untuk display di sheet Pesanan).
+  // WIP TIDAK ikut dihitung sebagai stok available — purely informasional.
+  const wipSheet = ss.getSheetByName(WIP_SHEET_NAME);
+  const wipMap = {};
+  if (!wipSheet) return wipMap;
+  const lastRow = wipSheet.getLastRow();
+  if (lastRow < 2) return wipMap;
+  const data = wipSheet.getRange(2, 1, lastRow - 1, WIP_HEADER.length).getValues();
+  for (let i = 0; i < data.length; i++) {
+    const sku = String(data[i][1] || '').trim();
+    const status = String(data[i][5] || '').toLowerCase().trim();
+    const pcs = parseFloat(data[i][2]);
+    if (!sku || status !== 'pending' || isNaN(pcs)) continue;
+    wipMap[sku] = (wipMap[sku] || 0) + pcs;
+  }
+  return wipMap;
+}
+
 function populatePesananSheet(orders, ss) {
   let sheet = ss.getSheetByName(PESANAN_SHEET_NAME);
   if (!sheet) sheet = ss.insertSheet(PESANAN_SHEET_NAME);
@@ -511,12 +547,14 @@ function populatePesananSheet(orders, ss) {
 
   // Cek stok per-baris kumulatif (FIFO)
   const stockMap = loadStockMap(ss);
+  const wipMap = loadWipMap(ss);
   const rows = [];
   const ketBackgrounds = [];
 
   for (const o of orders) {
     const need = o.jumlahPcs;
     const avail = stockMap.hasOwnProperty(o.idMaster) ? stockMap[o.idMaster] : 0;
+    const wip = wipMap[o.idMaster] || 0;
     let keterangan, kekurangan;
     if (avail >= need) {
       keterangan = "Ambil Gudang";
@@ -524,7 +562,9 @@ function populatePesananSheet(orders, ss) {
       stockMap[o.idMaster] = avail - need;
       stats.ambil++;
     } else {
-      keterangan = "Produksi";
+      // WIP TIDAK ikut dihitung sebagai available — operator yg decide
+      // tunggu vs cetak ulang. Cuma tag info di Keterangan kalau ada.
+      keterangan = wip > 0 ? `Produksi (WIP ${wip} ada)` : "Produksi";
       kekurangan = need - avail;
       stockMap[o.idMaster] = 0;
       stats.produksi++;
@@ -533,13 +573,13 @@ function populatePesananSheet(orders, ss) {
       o.resi, o.sku, o.qty,
       o.resi, o.sku.toLowerCase(), o.qty,
       o.idMaster, o.varian, need,
-      keterangan, kekurangan
+      keterangan, kekurangan, wip
     ]);
-    ketBackgrounds.push([keterangan === "Ambil Gudang" ? "#b6d7a8" : "#f4cccc"]);
+    ketBackgrounds.push([keterangan.startsWith("Ambil Gudang") ? "#b6d7a8" : (wip > 0 ? "#fff2cc" : "#f4cccc")]);
   }
 
   sheet.getRange(2, 1, rows.length, PESANAN_HEADER.length).setValues(rows);
-  // Highlight kolom Keterangan: hijau = Ambil Gudang, merah muda = Produksi
+  // Highlight kolom Keterangan: hijau = Ambil Gudang, kuning = Produksi tapi ada WIP, merah muda = Produksi tanpa WIP
   sheet.getRange(2, 10, ketBackgrounds.length, 1).setBackgrounds(ketBackgrounds);
 
   return stats;
