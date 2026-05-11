@@ -619,8 +619,10 @@ class BotApp(ctk.CTk):
             info,
             text=(
                 "Tim print catat batch cetak restock yg masih diproses (cutting/weeding).\n"
-                "Klik 'Selesai' saat sudah masuk rak gudang → kolom G (Adj Opname) di\n"
-                "DATABASE_STIKER auto-bertambah, kolom H (Stok aktif) ikut naik.\n"
+                "Klik 'Selesai' saat sudah masuk rak gudang → row baru ditulis ke sheet\n"
+                "LOG_MASUK (Keterangan: 'Restock oleh Sistem'). Tanggal kolom A di-skip\n"
+                "karena auto-fill via formula sheet.\n"
+                "Klik 'Hapus' kalau salah input — row WIP dihapus permanen.\n"
                 "Info WIP tampil di sheet 'Pesanan' & scanner — bantu hindari double-print."
             ),
             font=("Segoe UI", 11),
@@ -789,24 +791,32 @@ class BotApp(ctk.CTk):
         # Header row
         hdr = ctk.CTkFrame(self.wip_scroll, fg_color="#1f2937")
         hdr.pack(fill="x", pady=2)
-        for label, w in [("Tanggal", 140), ("SKU", 70), ("Pcs", 80), ("Lbr", 60), ("Operator", 120), ("Action", 120)]:
-            ctk.CTkLabel(hdr, text=label, width=w, font=("Segoe UI", 11, "bold")).pack(side="left", padx=4)
+        for label, w in [("Tanggal", 130), ("SKU", 60), ("Pcs", 70), ("Lbr", 50), ("Operator", 100), ("Action", 210)]:
+            ctk.CTkLabel(hdr, text=label, width=w, font=("Segoe UI", 11, "bold")).pack(side="left", padx=3)
 
-        # Data rows
+        # Data rows — tiap row punya tombol Selesai + Hapus
         for row_idx, r in pending:
             rf = ctk.CTkFrame(self.wip_scroll)
             rf.pack(fill="x", pady=1)
-            ctk.CTkLabel(rf, text=str(r[0])[:16], width=140, anchor="w").pack(side="left", padx=4)
-            ctk.CTkLabel(rf, text=str(r[1]), width=70).pack(side="left", padx=4)
-            ctk.CTkLabel(rf, text=str(r[2]), width=80).pack(side="left", padx=4)
-            ctk.CTkLabel(rf, text=str(r[3]) if len(r) > 3 else "", width=60).pack(side="left", padx=4)
-            ctk.CTkLabel(rf, text=str(r[4]) if len(r) > 4 else "", width=120).pack(side="left", padx=4)
+            ctk.CTkLabel(rf, text=str(r[0])[:16], width=130, anchor="w").pack(side="left", padx=3)
+            ctk.CTkLabel(rf, text=str(r[1]), width=60).pack(side="left", padx=3)
+            ctk.CTkLabel(rf, text=str(r[2]), width=70).pack(side="left", padx=3)
+            ctk.CTkLabel(rf, text=str(r[3]) if len(r) > 3 else "", width=50).pack(side="left", padx=3)
+            ctk.CTkLabel(rf, text=str(r[4]) if len(r) > 4 else "", width=100).pack(side="left", padx=3)
+            action_frame = ctk.CTkFrame(rf, fg_color="transparent")
+            action_frame.pack(side="left", padx=3)
             ctk.CTkButton(
-                rf, text="✔ Selesai", width=120,
+                action_frame, text="✔ Selesai", width=95,
                 fg_color="#16a34a", hover_color="#15803d",
                 command=lambda ri=row_idx, sku=str(r[1]), pcs=str(r[2]):
                     threading.Thread(target=self.mark_wip_done, args=(ri, sku, pcs), daemon=True).start()
-            ).pack(side="left", padx=4)
+            ).pack(side="left", padx=2)
+            ctk.CTkButton(
+                action_frame, text="🗑 Hapus", width=95,
+                fg_color="#dc2626", hover_color="#b91c1c",
+                command=lambda ri=row_idx, sku=str(r[1]), pcs=str(r[2]):
+                    threading.Thread(target=self.delete_wip_entry, args=(ri, sku, pcs), daemon=True).start()
+            ).pack(side="left", padx=2)
 
     def mark_wip_done(self, row_idx, sku, pcs_str):
         try:
@@ -818,8 +828,9 @@ class BotApp(ctk.CTk):
         confirm = messagebox.askyesno(
             "Konfirmasi WIP Selesai",
             f"Tandai WIP SKU {sku} ({pcs} pcs) sebagai SELESAI?\n\n"
-            f"Stok di DATABASE_STIKER kolom G (Adj Opname) akan bertambah {pcs} pcs.\n"
-            f"Kolom H (Stok aktif) ikut naik sesuai formula F+G."
+            f"Row baru akan ditulis ke sheet LOG_MASUK dengan keterangan\n"
+            f"'Restock oleh Sistem'. Kolom Tanggal di-skip (auto-fill via\n"
+            f"formula sheet)."
         )
         if not confirm:
             return
@@ -830,44 +841,61 @@ class BotApp(ctk.CTk):
 
         try:
             ws = self.get_or_create_wip_sheet()
-            ws_db = self.spreadsheet.worksheet("DATABASE_STIKER")
+            try:
+                ws_log_masuk = self.spreadsheet.worksheet("LOG_MASUK")
+            except gspread.WorksheetNotFound:
+                self.log_wip(
+                    "ERROR: Sheet 'LOG_MASUK' tidak ditemukan. Buat sheet itu dulu "
+                    "di Google Sheets dengan header: Tanggal | ID Master | Jumlah (Pcs) | Keterangan.",
+                    "merah"
+                )
+                return
 
             # 1. Update WIP row: status=done + Tanggal_Done
             today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             ws.update(range_name=f"F{row_idx}:G{row_idx}", values=[["done", today]])
 
-            # 2. Cari SKU di DATABASE_STIKER, increment kolom G (Adj Opname, 1-based col 7)
-            db_data = ws_db.get_all_values()
-            target_row = None
-            for i, dr in enumerate(db_data):
-                if i == 0:
-                    continue
-                if str(dr[0]).strip() == str(sku).strip():
-                    target_row = i + 1
-                    break
-
-            if target_row is None:
-                self.log_wip(
-                    f"⚠ WIP done tapi SKU {sku} tidak ada di DATABASE_STIKER. Stok TIDAK diupdate.",
-                    "merah"
-                )
-                self.refresh_wip_list()
-                return
-
-            try:
-                adj_old = int(db_data[target_row - 1][6])
-            except (ValueError, IndexError):
-                adj_old = 0
-            adj_new = adj_old + pcs
-            ws_db.update_cell(target_row, 7, adj_new)
+            # 2. Tulis ke LOG_MASUK kolom B/C/D — kolom A (Tanggal) di-skip,
+            #    biar formula sheet user yg fill tanggalnya.
+            col_b = ws_log_masuk.col_values(2)  # values di kolom B (termasuk header)
+            next_row = len(col_b) + 1
+            if next_row < 2:
+                next_row = 2  # safety: jangan tulis ke row header
+            ws_log_masuk.update(
+                range_name=f"B{next_row}:D{next_row}",
+                values=[[str(sku), pcs, "Restock oleh Sistem"]]
+            )
 
             self.log_wip(
-                f"✔ WIP done: SKU {sku} +{pcs} pcs ke Adj_Opname (sebelum: {adj_old}, sesudah: {adj_new})",
+                f"✔ WIP done: SKU {sku} +{pcs} pcs → row baru LOG_MASUK (B{next_row}:D{next_row}).",
                 "hijau"
             )
             self.refresh_wip_list()
         except Exception as e:
             self.log_wip(f"ERROR mark done: {e}", "merah")
+
+    def delete_wip_entry(self, row_idx, sku, pcs_str):
+        """Hard delete row WIP — untuk koreksi salah input dari tim print."""
+        confirm = messagebox.askyesno(
+            "Konfirmasi Hapus WIP",
+            f"HAPUS row WIP SKU {sku} ({pcs_str} pcs)?\n\n"
+            f"Row akan dihapus permanen dari sheet PRODUKSI_WIP.\n"
+            f"Tindakan ini TIDAK BISA di-undo — pastikan input ini memang salah."
+        )
+        if not confirm:
+            return
+
+        if not self._ensure_gs_connected():
+            self.log_wip("ERROR: Tidak terhubung ke Google Sheets.", "merah")
+            return
+
+        try:
+            ws = self.get_or_create_wip_sheet()
+            ws.delete_rows(row_idx)
+            self.log_wip(f"🗑 WIP row dihapus: SKU {sku} ({pcs_str} pcs) di baris {row_idx}.", "kuning")
+            self.refresh_wip_list()
+        except Exception as e:
+            self.log_wip(f"ERROR hapus row: {e}", "merah")
 
     def load_wip_map(self):
         """Return dict {sku: total_pcs_pending} dari sheet PRODUKSI_WIP."""
