@@ -1,9 +1,19 @@
 /**
- * SISTEM MANAJEMEN GUDANG STIKER - V9.0
+ * SISTEM MANAJEMEN GUDANG STIKER - V9.1
  *
  * File ini adalah Google Apps Script yang harus di-paste ke editor Apps Script
  * di Google Spreadsheet (Extensions → Apps Script). File ini disimpan di repo
  * sebagai referensi versi dan dokumentasi.
+ *
+ * Tambahan v9.1 (dari v9.0):
+ *   - Status WIP di sheet "Pesanan" jadi first-class citizen (bukan cuma
+ *     tag info di Keterangan). Sekarang ada 3 status Keterangan eksplisit:
+ *       1. "Ambil Gudang"  — stok aktif cukup cover need (hijau)
+ *       2. "Tunggu WIP"    — stok kurang tapi (stok + WIP) cukup cover (kuning)
+ *       3. "Produksi"      — stok + WIP juga tidak cukup, perlu cetak baru (merah)
+ *   - Allocation FIFO 3-tier per-row: stok aktif dulu, lalu WIP, baru produksi.
+ *     Kekurangan = sisa yg perlu cetak baru (setelah dikurangi stok + WIP).
+ *   - Result message upload nampilkan breakdown 3 status.
  *
  * Tambahan v9.0 (dari v8.0):
  *   - Integrasi sheet PRODUKSI_WIP (work-in-progress). Saat hasil cetak
@@ -12,8 +22,7 @@
  *     belum di-update; tapi info WIP muncul di sheet "Pesanan" supaya
  *     operator tahu jangan double-print.
  *   - Sheet "Pesanan" dapat kolom L baru: "WIP Pcs" (total pending WIP
- *     per SKU). Keterangan "Produksi" akan ditambah tag "(WIP {N} ada)"
- *     kalau ada WIP pending untuk SKU itu.
+ *     per SKU).
  *
  * Tambahan v8.0 (dari v7.0):
  *   - Auto-populate sheet "Pesanan" saat upload data pesanan baru.
@@ -328,7 +337,8 @@ function processUploadedFile(base64Content, fileName) {
     result += `\n⚠️ Sheet LIST_PESANAN belum dibuat — pesanan tidak diteruskan ke QC.`;
   }
   if (pesananStats) {
-    result += `\n+ Sheet "Pesanan" di-refresh: ${pesananStats.total} baris (Ambil Gudang ${pesananStats.ambil}, Produksi ${pesananStats.produksi}).`;
+    result += `\n+ Sheet "Pesanan" di-refresh: ${pesananStats.total} baris ` +
+      `(Ambil Gudang ${pesananStats.ambil}, Tunggu WIP ${pesananStats.tunggu_wip}, Produksi ${pesananStats.produksi}).`;
   }
   return result;
 }
@@ -542,44 +552,67 @@ function populatePesananSheet(orders, ss) {
        .setHorizontalAlignment("center");
   sheet.setFrozenRows(1);
 
-  const stats = { total: orders.length, ambil: 0, produksi: 0 };
+  const stats = { total: orders.length, ambil: 0, tunggu_wip: 0, produksi: 0 };
   if (orders.length === 0) return stats;
 
-  // Cek stok per-baris kumulatif (FIFO)
+  // FIFO 3-tier allocation per-row: Stok Aktif → WIP → Produksi baru.
+  // stockMap & wipMap di-deplete saat baris pakai resources-nya;
+  // wipOriginal disimpan untuk display total awal di kolom L.
   const stockMap = loadStockMap(ss);
   const wipMap = loadWipMap(ss);
+  const wipOriginal = {};
+  for (const k in wipMap) wipOriginal[k] = wipMap[k];
+
   const rows = [];
   const ketBackgrounds = [];
 
   for (const o of orders) {
     const need = o.jumlahPcs;
-    const avail = stockMap.hasOwnProperty(o.idMaster) ? stockMap[o.idMaster] : 0;
-    const wip = wipMap[o.idMaster] || 0;
-    let keterangan, kekurangan;
-    if (avail >= need) {
+    const stokAvail = stockMap[o.idMaster] || 0;
+    const wipAvail = wipMap[o.idMaster] || 0;
+
+    // 3-tier allocation
+    const ambilStok = Math.min(stokAvail, need);
+    const sisaAfterStok = need - ambilStok;
+    const ambilWip = Math.min(wipAvail, sisaAfterStok);
+    const sisaProduksi = sisaAfterStok - ambilWip;
+
+    stockMap[o.idMaster] = stokAvail - ambilStok;
+    wipMap[o.idMaster] = wipAvail - ambilWip;
+
+    // Keterangan = source dominan (Produksi > Tunggu WIP > Ambil Gudang)
+    let keterangan, kekurangan, bg;
+    if (sisaProduksi > 0) {
+      keterangan = "Produksi";
+      kekurangan = sisaProduksi;
+      bg = "#f4cccc";  // merah muda
+      stats.produksi++;
+    } else if (ambilWip > 0) {
+      keterangan = "Tunggu WIP";
+      kekurangan = 0;
+      bg = "#fff2cc";  // kuning
+      stats.tunggu_wip++;
+    } else {
       keterangan = "Ambil Gudang";
       kekurangan = 0;
-      stockMap[o.idMaster] = avail - need;
+      bg = "#b6d7a8";  // hijau
       stats.ambil++;
-    } else {
-      // WIP TIDAK ikut dihitung sebagai available — operator yg decide
-      // tunggu vs cetak ulang. Cuma tag info di Keterangan kalau ada.
-      keterangan = wip > 0 ? `Produksi (WIP ${wip} ada)` : "Produksi";
-      kekurangan = need - avail;
-      stockMap[o.idMaster] = 0;
-      stats.produksi++;
     }
+
+    // Kolom WIP Pcs = total WIP awal per SKU (info kapasitas pending)
+    const wipDisplay = wipOriginal[o.idMaster] || 0;
+
     rows.push([
       o.resi, o.sku, o.qty,
       o.resi, o.sku.toLowerCase(), o.qty,
       o.idMaster, o.varian, need,
-      keterangan, kekurangan, wip
+      keterangan, kekurangan, wipDisplay
     ]);
-    ketBackgrounds.push([keterangan.startsWith("Ambil Gudang") ? "#b6d7a8" : (wip > 0 ? "#fff2cc" : "#f4cccc")]);
+    ketBackgrounds.push([bg]);
   }
 
   sheet.getRange(2, 1, rows.length, PESANAN_HEADER.length).setValues(rows);
-  // Highlight kolom Keterangan: hijau = Ambil Gudang, kuning = Produksi tapi ada WIP, merah muda = Produksi tanpa WIP
+  // Highlight kolom Keterangan: hijau = Ambil Gudang, kuning = Tunggu WIP, merah-muda = Produksi
   sheet.getRange(2, 10, ketBackgrounds.length, 1).setBackgrounds(ketBackgrounds);
 
   return stats;
