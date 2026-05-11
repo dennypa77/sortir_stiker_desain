@@ -911,9 +911,17 @@ class BotApp(ctk.CTk):
         os.makedirs(batches['10pcs']['dir'], exist_ok=True)
         os.makedirs(batches['50pcs']['dir'], exist_ok=True)
 
+        # Agregat sisa produksi per (numeric_id, batch_type) supaya 10 resi
+        # @10pcs (=100pcs total) hanya cetak 1 lembar (100pcs/page optimal),
+        # bukan 10 lembar seperti versi lama yang per-baris.
+        sku_print_queue = {}  # key: (numeric_id, '10pcs'|'50pcs'), val: dict
+        # Map untuk update keterangan di success_logs setelah aggregate print
+        # selesai. Index = posisi di success_logs (placeholder PENDING_PRODUKSI).
+        pending_success_idx = {}  # (numeric_id, batch_type) -> list of (idx, sisa)
+
         for i, task in enumerate(task_list):
             self.progress.set((i) / total_tasks)
-            
+
             numeric_id = task['numeric_id']
             resi_val = task['resi']
             total_pcs_needed = task['total_pcs_needed']
@@ -934,71 +942,124 @@ class BotApp(ctk.CTk):
                     ket_sukses = f"Tersedia dari gudang ({ambil_terpenuhi}) - LOG_KELUAR dilewati (manual)"
 
                 self.log_gui(f"● Resi {resi_val} (SKU {numeric_id}): {total_pcs_needed} pcs", "hijau")
-
                 self.log_gudang_ready(f"GUDANG - Resi: {resi_val} | SKU: {numeric_id} | Jumlah: {ambil_terpenuhi} pcs")
                 success_logs.append((f"Tugas-{(i+1):03d}", numeric_id, total_pcs_needed, ket_sukses))
-                
+
             else:
+                # 2. Produksi — queue ke print agregat per SKU di akhir.
                 sisa_produksi = total_pcs_needed
                 self.log_gui(f"● Resi {resi_val} (SKU {numeric_id}): {total_pcs_needed} pcs", "cyan")
-                
-            # PROSES CETAK / DUPLIKAT
-            if sisa_produksi > 0:
-                found_paths = file_cache.get(numeric_id, [])
-                if not found_paths:
-                    fail_logs.append((original_sku, f"Sisa Produksi: {sisa_produksi}", "Gagal - Master PDF tidak ada."))
-                    self.log_gui(f"❌ (SKU {numeric_id}) File Master tidak ditemukan!", "merah")
-                    continue
-                
-                optimal_candidates = [p for p in found_paths if "versioptimal" in os.path.basename(p).lower()]
-                standard_candidates = [p for p in found_paths if p not in optimal_candidates]
-                
-                found_file = None
-                version_type = "standard"
-                if optimal_candidates:
-                    optimal_candidates.sort(key=len)
-                    found_file = optimal_candidates[0]
-                    version_type = "optimal"
-                    if len(optimal_candidates) > 1: warnings_log.append((numeric_id, "", "Duplikat versi optimal ditemukan."))
-                elif standard_candidates:
-                    standard_candidates.sort(key=len)
-                    found_file = standard_candidates[0]
-                    if len(standard_candidates) > 1: warnings_log.append((numeric_id, "", "Duplikat standar ditemukan."))
-                
-                batch_size_per_page = 100.0 if version_type == 'optimal' else 50.0
-                num_pages_to_print = int(math.ceil(sisa_produksi / batch_size_per_page))
-                
-                pcs_type = '10pcs' if task['pcs_per_paket'] <= 20 else '50pcs'
-                batch_info = batches[pcs_type]
 
-                # Check Batch Folder Logic
-                if batch_info['count'] >= 20: 
-                    batch_info['number'] += 1
-                    batch_info['count'] = 0
-                    batch_info['dir'] = os.path.join(batch_info['base_dir'], f"Batch_{batch_info['number']}")
-                    os.makedirs(batch_info['dir'], exist_ok=True)
+                batch_type = '10pcs' if task['pcs_per_paket'] <= 20 else '50pcs'
+                key = (numeric_id, batch_type)
+                if key not in sku_print_queue:
+                    sku_print_queue[key] = {
+                        'sisa': 0,
+                        'first_task_index': i + 1,
+                        'sample_task': task,
+                        'task_count': 0,
+                    }
+                sku_print_queue[key]['sisa'] += sisa_produksi
+                sku_print_queue[key]['task_count'] += 1
 
-                try:
-                    for _ in range(num_pages_to_print):
-                        out_filename = get_next_filename((i+1), numeric_id, "-PRODUK" if version_type != 'optimal' else "-VERSIOPTIMAL")
-                        # Taruh di dalam folder Batch
-                        out_path = os.path.join(batch_info['dir'], out_filename)
-                        
-                        with open(found_file, "rb") as infile:
-                            reader = PdfReader(infile)
-                            writer = PdfWriter()
-                            if len(reader.pages) > 0:
-                                writer.add_page(reader.pages[0])
-                                with open(out_path, "wb") as outfile:
-                                    writer.write(outfile)
-                                    
-                    keterangan = f"Sukses Cetak {num_pages_to_print} lbr (Dilimpahkan ke {pcs_type}/Batch_{batch_info['number']})"
-                    success_logs.append((f"Tugas-{(i+1):03d}", numeric_id, sisa_produksi, keterangan))
-                    
-                    batch_info['count'] += 1
-                except Exception as e:
-                    fail_logs.append((original_sku, str(sisa_produksi), f"Gagal Ekstrak - {e}"))
-                    self.log_gui(f"❌ Error ekstrak SKU {numeric_id}: {e}", "merah")
+                # Placeholder di success_logs — akan di-update setelah print.
+                placeholder_idx = len(success_logs)
+                success_logs.append((f"Tugas-{(i+1):03d}", numeric_id, sisa_produksi, "PENDING_PRODUKSI"))
+                pending_success_idx.setdefault(key, []).append((placeholder_idx, sisa_produksi))
+
+        # =====================================================================
+        # CETAK AGREGAT PER SKU — hitung jumlah lembar dari TOTAL sisa per SKU,
+        # bukan dari sisa per-baris. Ini menghilangkan duplikasi lembar untuk
+        # banyak resi kecil dengan SKU sama.
+        # =====================================================================
+        if sku_print_queue:
+            self.log_gui(
+                f"\n[INFO] Cetak agregat untuk {len(sku_print_queue)} grup SKU yang butuh produksi...",
+                "info"
+            )
+
+        for key, q in sku_print_queue.items():
+            numeric_id, batch_type = key
+            total_sisa = q['sisa']
+            task = q['sample_task']
+            original_sku = task['sku']
+
+            found_paths = file_cache.get(numeric_id, [])
+            if not found_paths:
+                fail_logs.append((original_sku, f"Sisa Produksi: {total_sisa}", "Gagal - Master PDF tidak ada."))
+                self.log_gui(f"❌ (SKU {numeric_id}) File Master tidak ditemukan!", "merah")
+                # Update placeholder ke status gagal
+                for idx, sisa in pending_success_idx.get(key, []):
+                    entry = success_logs[idx]
+                    success_logs[idx] = (entry[0], entry[1], entry[2], "Gagal - Master PDF tidak ada")
+                continue
+
+            optimal_candidates = [p for p in found_paths if "versioptimal" in os.path.basename(p).lower()]
+            standard_candidates = [p for p in found_paths if p not in optimal_candidates]
+
+            found_file = None
+            version_type = "standard"
+            if optimal_candidates:
+                optimal_candidates.sort(key=len)
+                found_file = optimal_candidates[0]
+                version_type = "optimal"
+                if len(optimal_candidates) > 1:
+                    warnings_log.append((numeric_id, "", "Duplikat versi optimal ditemukan."))
+            elif standard_candidates:
+                standard_candidates.sort(key=len)
+                found_file = standard_candidates[0]
+                if len(standard_candidates) > 1:
+                    warnings_log.append((numeric_id, "", "Duplikat standar ditemukan."))
+
+            batch_size_per_page = 100.0 if version_type == 'optimal' else 50.0
+            num_pages_to_print = int(math.ceil(total_sisa / batch_size_per_page))
+
+            batch_info = batches[batch_type]
+            if batch_info['count'] >= 20:
+                batch_info['number'] += 1
+                batch_info['count'] = 0
+                batch_info['dir'] = os.path.join(batch_info['base_dir'], f"Batch_{batch_info['number']}")
+                os.makedirs(batch_info['dir'], exist_ok=True)
+
+            try:
+                for _ in range(num_pages_to_print):
+                    out_filename = get_next_filename(
+                        q['first_task_index'],
+                        numeric_id,
+                        "-PRODUK" if version_type != 'optimal' else "-VERSIOPTIMAL"
+                    )
+                    out_path = os.path.join(batch_info['dir'], out_filename)
+                    with open(found_file, "rb") as infile:
+                        reader = PdfReader(infile)
+                        writer = PdfWriter()
+                        if len(reader.pages) > 0:
+                            writer.add_page(reader.pages[0])
+                            with open(out_path, "wb") as outfile:
+                                writer.write(outfile)
+
+                ket_agregat = (
+                    f"Sukses Cetak {num_pages_to_print} lbr "
+                    f"(agregat {total_sisa} pcs dari {q['task_count']} resi → "
+                    f"{batch_type}/Batch_{batch_info['number']})"
+                )
+                self.log_gui(
+                    f"➤ SKU {numeric_id}: cetak {num_pages_to_print} lbr "
+                    f"(total {total_sisa} pcs dari {q['task_count']} resi → "
+                    f"{batch_type}/Batch_{batch_info['number']})",
+                    "cyan"
+                )
+                # Update semua placeholder PENDING_PRODUKSI untuk key ini
+                for idx, sisa in pending_success_idx.get(key, []):
+                    entry = success_logs[idx]
+                    success_logs[idx] = (entry[0], entry[1], entry[2], ket_agregat)
+
+                batch_info['count'] += 1
+            except Exception as e:
+                fail_logs.append((original_sku, str(total_sisa), f"Gagal Ekstrak - {e}"))
+                self.log_gui(f"❌ Error ekstrak SKU {numeric_id}: {e}", "merah")
+                for idx, sisa in pending_success_idx.get(key, []):
+                    entry = success_logs[idx]
+                    success_logs[idx] = (entry[0], entry[1], entry[2], f"Gagal Ekstrak - {e}")
 
         # PUSH SHEETS
         if logs_keluar_to_append and auto_log_keluar:
