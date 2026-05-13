@@ -221,6 +221,25 @@ function setupPermintaanRestockSheet() {
   const checkboxRule = SpreadsheetApp.newDataValidation().requireCheckbox().build();
   sheet.getRange(2, 10, 999, 1).setDataValidation(checkboxRule);
 
+  // CLEANUP v10.3: kolom I (Jumlah_Aktual_Gudang) sekarang harus PLAIN NUMBER.
+  // Buang sisa validasi checkbox/dropdown dari migrasi sebelumnya. Juga clear
+  // nilai TRUE/FALSE residu (kalau ada — biasanya dari Approve column lama yg
+  // ke-shift waktu insertColumnBefore/deleteColumn).
+  sheet.getRange(2, 9, 999, 1).clearDataValidations();
+  const lastDataRow = sheet.getLastRow();
+  if (lastDataRow >= 2) {
+    const colIRange = sheet.getRange(2, 9, lastDataRow - 1, 1);
+    const colIVals = colIRange.getValues();
+    for (let i = 0; i < colIVals.length; i++) {
+      const v = colIVals[i][0];
+      if (v === true || v === false) {
+        sheet.getRange(i + 2, 9).clearContent();
+      }
+    }
+  }
+  // Kolom K (Tgl_Approve) & L (Catatan) juga harus plain — clear validasi sisa.
+  sheet.getRange(2, 11, 999, 2).clearDataValidations();
+
   // Kolom D = Jml_Bundle (auto-formula, 1 bundle = 10 pcs, dibulatkan ke atas).
   const bundleFormulas = [];
   for (let i = 2; i <= 1000; i++) {
