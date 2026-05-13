@@ -26,25 +26,31 @@ CONFIG_FILE = "config.json"
 
 PERMINTAAN_RESTOCK_SHEET_NAME = "PERMINTAAN_RESTOCK"
 PERMINTAAN_RESTOCK_HEADER = [
-    "Tanggal_Request",       # A — auto-fill by Apps Script onEdit
-    "SKU",                   # B — gudang isi
-    "Jumlah_Request",        # C — gudang isi
-    "Requester",             # D — gudang isi
-    "Status",                # E — pending/in_progress/menunggu_approval/approved/rejected/dibatalkan
-    "Tanggal_Mulai_Print",   # F — diisi app.py saat klik Mulai Produksi
-    "Print_Operator",        # G — diisi app.py
-    "Jumlah_Print_Aktual",   # H — diisi app.py saat klik Selesai Produksi
-    "Approve",               # I — checkbox untuk gudang
-    "Tanggal_Approve",       # J — auto-fill by onEdit saat I=TRUE
-    "Catatan",               # K — opsional
+    "Tanggal_Request",        # A — auto-fill by Apps Script onEdit
+    "SKU",                    # B — gudang isi
+    "Jumlah_Request",         # C — gudang isi (pcs)
+    "Jml_Bundle",             # D — auto-formula =ROUNDUP(C/10), 1 bundle = 10 pcs (info gudang)
+    "Requester",              # E — gudang isi
+    "Status",                 # F — pending/in_progress/menunggu_approval/approved/rejected/dibatalkan
+    "Tanggal_Mulai_Print",    # G — diisi app.py saat klik Mulai Produksi
+    "Print_Operator",         # H — diisi app.py
+    "Jumlah_Print_Aktual",    # I — diisi app.py saat klik Selesai Produksi (qty cetak)
+    "Jumlah_Aktual_Gudang",   # J — diisi gudang saat verifikasi fisik (qty FINAL masuk gudang)
+    "Approve",                # K — checkbox untuk gudang
+    "Tanggal_Approve",        # L — auto-fill by onEdit saat K=TRUE
+    "Catatan",                # M — opsional
 ]
-# Status yg termasuk "WIP" untuk display di scanner, eksekusi, sheet Pesanan
+# Status yg termasuk "WIP" — untuk display info di scanner, eksekusi, sheet Pesanan.
+# Catatan v10.x: WIP HANYA info, tidak lagi mengurangi kekurangan produksi.
 RESTOCK_WIP_STATUSES = {"pending", "in_progress", "menunggu_approval"}
+# Konversi pcs → bundle (untuk gudang) dan pcs → lembar (untuk tim print).
+RESTOCK_BUNDLE_PCS = 10    # 1 plastik kecil gudang = 10 pcs
+RESTOCK_LEMBAR_PCS = 100   # 1 lembar cetak (versi optimal) = 100 pcs
 
 class BotApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Bot Sortir Stiker & Gudang v10.3")
+        self.title("Bot Sortir Stiker & Gudang v10.5")
         self.geometry("850x700")
 
         self.config_data = self.load_config()
@@ -639,11 +645,12 @@ class BotApp(ctk.CTk):
         ctk.CTkLabel(
             info,
             text=(
-                "Tim gudang submit request di sheet PERMINTAAN_RESTOCK (kolom B/C/D).\n"
+                "Tim gudang submit request di sheet PERMINTAAN_RESTOCK (kolom B/C/E).\n"
                 "Tim print: klik 'Mulai Produksi' → cetak → klik 'Selesai Produksi' +\n"
-                "input jumlah aktual yang dicetak. Status berubah ke 'menunggu_approval'.\n"
-                "Gudang verifikasi fisik → centang Approve checkbox di sheet → otomatis\n"
-                "tulis ke LOG_MASUK + status=approved (stok masuk gudang)."
+                "input jumlah aktual yang dicetak (kolom I). Status → 'menunggu_approval'.\n"
+                "Gudang verifikasi fisik → isi 'Jumlah_Aktual_Gudang' (kol J) +\n"
+                "centang Approve (kol K) → otomatis tulis ke LOG_MASUK pakai qty gudang_aktual.\n"
+                f"Satuan: 1 lembar = {RESTOCK_LEMBAR_PCS} pcs (cetak); 1 bundle = {RESTOCK_BUNDLE_PCS} pcs (plastik gudang)."
             ),
             font=("Segoe UI", 11),
             text_color="#93c5fd",
@@ -713,6 +720,17 @@ class BotApp(ctk.CTk):
                 f"Jalankan menu Apps Script '📦 Kelola Gudang → 5. Setup Sheet PERMINTAAN_RESTOCK' dulu."
             )
 
+    @staticmethod
+    def pcs_to_lembar(pcs):
+        """Konversi pcs → jumlah lembar (dibulatkan ke atas, 1 lbr = 100 pcs)."""
+        try:
+            n = int(pcs)
+        except (ValueError, TypeError):
+            return 0
+        if n <= 0:
+            return 0
+        return math.ceil(n / RESTOCK_LEMBAR_PCS)
+
     def refresh_wip_list(self):
         if not self._ensure_gs_connected():
             self.log_wip("ERROR: Tidak terhubung ke Google Sheets. Cek tab Koneksi.", "merah")
@@ -734,12 +752,15 @@ class BotApp(ctk.CTk):
             except Exception:
                 pass
 
-        # Group by status — only show WIP-like statuses
+        # Group by status — only show WIP-like statuses.
+        # Layout v10.2: r[0]=Tanggal r[1]=SKU r[2]=Jumlah_Request r[3]=Jml_Bundle
+        # r[4]=Requester r[5]=Status r[6]=Tgl_Mulai r[7]=Operator
+        # r[8]=Jumlah_Print_Aktual r[9]=Jumlah_Aktual_Gudang r[10]=Approve ...
         active = []  # (row_idx, row_data, status_lower)
         for i, r in enumerate(rows[1:], start=2):
-            if len(r) < 5:
+            if len(r) < 6:
                 continue
-            status = str(r[4]).strip().lower()
+            status = str(r[5]).strip().lower()
             if status in RESTOCK_WIP_STATUSES:
                 active.append((i, r, status))
 
@@ -763,63 +784,73 @@ class BotApp(ctk.CTk):
             text_color="#16a34a"
         )
 
-        # Header row
+        # Header row — kolom baru: "Lembar" (estimasi 100 pcs/lbr) & "Gudang Akt."
+        # (qty final dari verifikasi gudang, kalau sudah diisi).
         hdr = ctk.CTkFrame(self.wip_scroll, fg_color="#1f2937")
         hdr.pack(fill="x", pady=2)
         for label, w in [
-            ("Tanggal", 130), ("SKU", 60), ("Jumlah", 80), ("Requester", 100),
-            ("Status", 140), ("Operator", 100), ("Action", 240)
+            ("Tanggal", 120), ("SKU", 55), ("Req (pcs)", 75), ("Lembar", 65),
+            ("Print Akt.", 75), ("Gudang Akt.", 85), ("Requester", 90),
+            ("Status", 130), ("Operator", 85), ("Action", 200)
         ]:
-            ctk.CTkLabel(hdr, text=label, width=w, font=("Segoe UI", 11, "bold")).pack(side="left", padx=3)
+            ctk.CTkLabel(hdr, text=label, width=w, font=("Segoe UI", 11, "bold")).pack(side="left", padx=2)
 
         # Data rows
         for row_idx, r, status in active:
             rf = ctk.CTkFrame(self.wip_scroll)
             rf.pack(fill="x", pady=1)
-            ctk.CTkLabel(rf, text=str(r[0])[:16], width=130, anchor="w").pack(side="left", padx=3)
-            ctk.CTkLabel(rf, text=str(r[1]) if len(r) > 1 else "", width=60).pack(side="left", padx=3)
-            # Jumlah display: aktual kalau sudah ada, else request
+            ctk.CTkLabel(rf, text=str(r[0])[:16], width=120, anchor="w").pack(side="left", padx=2)
+            ctk.CTkLabel(rf, text=str(r[1]) if len(r) > 1 else "", width=55).pack(side="left", padx=2)
             jml_req = str(r[2]) if len(r) > 2 else ""
-            jml_akt = str(r[7]) if len(r) > 7 else ""
-            jml_display = f"{jml_akt} / {jml_req}" if jml_akt and jml_akt != jml_req else jml_req
-            ctk.CTkLabel(rf, text=jml_display, width=80).pack(side="left", padx=3)
-            ctk.CTkLabel(rf, text=str(r[3]) if len(r) > 3 else "", width=100).pack(side="left", padx=3)
+            ctk.CTkLabel(rf, text=jml_req, width=75).pack(side="left", padx=2)
+            try:
+                pcs_req_int = int(jml_req) if jml_req else 0
+            except (ValueError, TypeError):
+                pcs_req_int = 0
+            lembar_display = f"≈ {self.pcs_to_lembar(pcs_req_int)} lbr" if pcs_req_int > 0 else "-"
+            ctk.CTkLabel(rf, text=lembar_display, width=65, text_color="#93c5fd").pack(side="left", padx=2)
+            jml_print = str(r[8]) if len(r) > 8 else ""
+            ctk.CTkLabel(rf, text=jml_print or "-", width=75).pack(side="left", padx=2)
+            jml_gudang = str(r[9]) if len(r) > 9 else ""
+            gudang_color = "#34d399" if jml_gudang else "#6b7280"
+            ctk.CTkLabel(rf, text=jml_gudang or "-", width=85, text_color=gudang_color).pack(side="left", padx=2)
+            ctk.CTkLabel(rf, text=str(r[4]) if len(r) > 4 else "", width=90).pack(side="left", padx=2)
             ctk.CTkLabel(
-                rf, text=status, width=140,
+                rf, text=status, width=130,
                 text_color={"pending": "#fbbf24", "in_progress": "#3b82f6", "menunggu_approval": "#f59e0b"}.get(status, "#9ca3af")
-            ).pack(side="left", padx=3)
-            ctk.CTkLabel(rf, text=str(r[6]) if len(r) > 6 else "", width=100).pack(side="left", padx=3)
+            ).pack(side="left", padx=2)
+            ctk.CTkLabel(rf, text=str(r[7]) if len(r) > 7 else "", width=85).pack(side="left", padx=2)
 
             action_frame = ctk.CTkFrame(rf, fg_color="transparent")
-            action_frame.pack(side="left", padx=3)
+            action_frame.pack(side="left", padx=2)
 
             sku = str(r[1]) if len(r) > 1 else ""
             jml_req_int = jml_req
 
             if status == "pending":
                 ctk.CTkButton(
-                    action_frame, text="▶ Mulai", width=80,
+                    action_frame, text="▶ Mulai", width=70,
                     fg_color="#3b82f6", hover_color="#2563eb",
                     command=lambda ri=row_idx, s=sku, j=jml_req_int:
                         threading.Thread(target=self.start_production, args=(ri, s, j), daemon=True).start()
                 ).pack(side="left", padx=2)
                 ctk.CTkButton(
-                    action_frame, text="🗑 Hapus", width=80,
+                    action_frame, text="🗑 Hapus", width=70,
                     fg_color="#dc2626", hover_color="#b91c1c",
                     command=lambda ri=row_idx, s=sku, j=jml_req_int:
                         threading.Thread(target=self.delete_restock_entry, args=(ri, s, j), daemon=True).start()
                 ).pack(side="left", padx=2)
             elif status == "in_progress":
                 ctk.CTkButton(
-                    action_frame, text="✔ Selesai Produksi", width=160,
+                    action_frame, text="✔ Selesai Produksi", width=150,
                     fg_color="#16a34a", hover_color="#15803d",
                     command=lambda ri=row_idx, s=sku, j=jml_req_int:
                         threading.Thread(target=self.finish_production, args=(ri, s, j), daemon=True).start()
                 ).pack(side="left", padx=2)
             elif status == "menunggu_approval":
                 ctk.CTkLabel(
-                    action_frame, text="⏳ Menunggu approve gudang",
-                    text_color="#f59e0b", width=220
+                    action_frame, text="⏳ Tunggu verifikasi gudang",
+                    text_color="#f59e0b", width=190
                 ).pack(side="left", padx=2)
 
     def start_production(self, row_idx, sku, jumlah_req):
@@ -833,22 +864,43 @@ class BotApp(ctk.CTk):
         try:
             ws = self.get_restock_sheet()
             today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            # Update kolom E (Status), F (Tanggal_Mulai_Print), G (Print_Operator)
-            ws.update(range_name=f"E{row_idx}:G{row_idx}", values=[["in_progress", today, op]])
-            self.log_wip(f"▶ MULAI produksi SKU {sku} ({jumlah_req} pcs) — operator: {op}", "hijau")
+            # Update kolom F (Status), G (Tanggal_Mulai_Print), H (Print_Operator)
+            ws.update(range_name=f"F{row_idx}:H{row_idx}", values=[["in_progress", today, op]])
+            try:
+                lbr = self.pcs_to_lembar(int(jumlah_req))
+            except (ValueError, TypeError):
+                lbr = 0
+            lbr_info = f" / ≈ {lbr} lbr" if lbr > 0 else ""
+            self.log_wip(
+                f"▶ MULAI produksi SKU {sku} ({jumlah_req} pcs{lbr_info}) — operator: {op}",
+                "hijau"
+            )
             self.refresh_wip_list()
         except Exception as e:
             self.log_wip(f"ERROR mulai produksi: {e}", "merah")
 
     def finish_production(self, row_idx, sku, jumlah_req):
-        """Klik 'Selesai Produksi' di row in_progress → prompt qty aktual + set menunggu_approval."""
-        # Prompt jumlah aktual via dialog (default = jumlah_request)
+        """Klik 'Selesai Produksi' di row in_progress → prompt qty aktual + set menunggu_approval.
+
+        Yang diinput di sini = qty hasil CETAK tim print (kol I). Qty FINAL yang
+        masuk gudang (kol J Jumlah_Aktual_Gudang) di-input langsung di sheet
+        oleh tim gudang saat verifikasi fisik."""
+        try:
+            req_int = int(jumlah_req)
+            lbr_req = self.pcs_to_lembar(req_int) if req_int > 0 else 0
+        except (ValueError, TypeError):
+            req_int = 0
+            lbr_req = 0
+        lbr_info = f" ≈ {lbr_req} lbr" if lbr_req > 0 else ""
+
         dialog = ctk.CTkInputDialog(
             text=(
-                f"Jumlah pcs yang BENAR-BENAR dicetak untuk SKU {sku}?\n"
-                f"(request awal: {jumlah_req} pcs)\n\n"
-                f"Setelah klik OK, status berubah ke 'menunggu_approval'.\n"
-                f"Tim gudang akan verifikasi fisik & centang Approve di sheet."
+                f"Jumlah pcs HASIL CETAK tim print untuk SKU {sku}?\n"
+                f"(request awal: {jumlah_req} pcs{lbr_info})\n\n"
+                f"Catatan: 1 lembar = {RESTOCK_LEMBAR_PCS} pcs (versi optimal).\n"
+                f"Ini qty cetak — qty FINAL masuk gudang akan diisi tim gudang\n"
+                f"di sheet kolom J (Jumlah_Aktual_Gudang) saat verifikasi fisik.\n\n"
+                f"Setelah klik OK, status berubah ke 'menunggu_approval'."
             ),
             title="Jumlah Aktual yang Dicetak"
         )
@@ -867,12 +919,13 @@ class BotApp(ctk.CTk):
             return
         try:
             ws = self.get_restock_sheet()
-            # Update kolom E (Status), H (Jumlah_Print_Aktual)
-            ws.update_cell(row_idx, 5, "menunggu_approval")
-            ws.update_cell(row_idx, 8, jumlah_aktual)
+            # Update kolom F (Status), I (Jumlah_Print_Aktual)
+            ws.update_cell(row_idx, 6, "menunggu_approval")
+            ws.update_cell(row_idx, 9, jumlah_aktual)
+            lbr_akt = self.pcs_to_lembar(jumlah_aktual)
             self.log_wip(
-                f"✔ SELESAI produksi SKU {sku}: {jumlah_aktual} pcs (request {jumlah_req}). "
-                f"Status → menunggu_approval. Serahkan ke gudang utk verifikasi & approve.",
+                f"✔ SELESAI cetak SKU {sku}: {jumlah_aktual} pcs (≈ {lbr_akt} lbr) — request {jumlah_req}. "
+                f"Status → menunggu_approval. Tim gudang akan verifikasi fisik & isi Jumlah_Aktual_Gudang.",
                 "hijau"
             )
             self.refresh_wip_list()
@@ -894,8 +947,8 @@ class BotApp(ctk.CTk):
             return
         try:
             ws = self.get_restock_sheet()
-            # Re-check status sebelum hapus (race-safe)
-            cur_status = ws.cell(row_idx, 5).value
+            # Re-check status sebelum hapus (race-safe) — kol F = 6
+            cur_status = ws.cell(row_idx, 6).value
             if str(cur_status).strip().lower() != "pending":
                 self.log_wip(
                     f"ERROR: status saat ini '{cur_status}' — hanya 'pending' yg boleh dihapus.",
@@ -912,7 +965,8 @@ class BotApp(ctk.CTk):
     def load_wip_map(self):
         """Return dict {sku: total_pcs_in_pipeline} dari PERMINTAAN_RESTOCK.
         Hitung row dgn status in [pending, in_progress, menunggu_approval].
-        Pakai Jumlah_Print_Aktual kalau sudah diisi, else Jumlah_Request."""
+        Pakai Jumlah_Print_Aktual (kol I, idx 8) kalau sudah diisi, else Jumlah_Request (kol C, idx 2).
+        Layout v10.2: status di kol F (idx 5)."""
         wip_map = {}
         if not self._ensure_gs_connected():
             return wip_map
@@ -925,15 +979,15 @@ class BotApp(ctk.CTk):
         except Exception:
             return wip_map
         for r in rows[1:]:
-            if len(r) < 5:
+            if len(r) < 6:
                 continue
-            status = str(r[4]).strip().lower()
+            status = str(r[5]).strip().lower()
             if status not in RESTOCK_WIP_STATUSES:
                 continue
             sku = str(r[1]).strip() if len(r) > 1 else ""
             if not sku:
                 continue
-            pcs_aktual_str = str(r[7]).strip() if len(r) > 7 else ""
+            pcs_aktual_str = str(r[8]).strip() if len(r) > 8 else ""
             pcs_req_str = str(r[2]).strip() if len(r) > 2 else ""
             pcs = 0
             try:
@@ -1083,10 +1137,12 @@ class BotApp(ctk.CTk):
                 if ready_count > 0:
                     self.speak(f"{num_id} kosong")
 
-            # Info WIP (kalau ada) — tampilkan untuk SKU produksi/kekurangan
+            # Info WIP (kalau ada) — info-only, JANGAN tunda cetak. Tim print
+            # prioritas orderan; restock dikerjakan setelah orderan menurun.
             if wip > 0 and current_gudang < needed:
                 self.print_scan_log(
-                    f"   ⚠ WIP: {wip} pcs sedang diproses (cek tab Restock Produksi sebelum cetak ulang)",
+                    f"   ℹ WIP info: {wip} pcs restock SKU {num_id} sedang dalam pipeline "
+                    f"(tetap cetak orderan — WIP info aja, bukan pengganti stok).",
                     "kuning"
                 )
 
@@ -1349,13 +1405,16 @@ class BotApp(ctk.CTk):
                 "info"
             )
 
-        # Load WIP map sekali — info untuk konfirmasi jangan double-print.
+        # Load WIP map sekali — info-only. Tim print prioritas orderan,
+        # cetak tetap jalan walaupun ada WIP pipeline (restock dikerjakan
+        # belakangan saat orderan menurun).
         wip_map_main = {}
         try:
             wip_map_main = self.load_wip_map()
             if wip_map_main:
                 self.log_gui(
-                    f"[INFO] WIP pending: {sum(wip_map_main.values())} pcs di {len(wip_map_main)} SKU (sheet PRODUKSI_WIP).",
+                    f"[INFO] WIP pipeline: {sum(wip_map_main.values())} pcs di {len(wip_map_main)} SKU "
+                    f"(sheet PERMINTAAN_RESTOCK) — info aja, cetak orderan tetap jalan.",
                     "info"
                 )
         except Exception as e:
@@ -1367,12 +1426,12 @@ class BotApp(ctk.CTk):
             task = q['sample_task']
             original_sku = task['sku']
 
-            # Peringatan WIP — jangan double-print kalau ada WIP cukup.
+            # Info WIP (tidak menahan cetak). Kekurangan tetap diproses penuh.
             wip_existing = wip_map_main.get(numeric_id, 0)
             if wip_existing > 0:
                 self.log_gui(
-                    f"   ⚠ SKU {numeric_id}: WIP {wip_existing} pcs sedang diproses "
-                    f"(butuh {total_sisa} pcs) — konfirmasi tim print sebelum cetak ulang.",
+                    f"   ℹ SKU {numeric_id}: ada {wip_existing} pcs di pipeline restock — "
+                    f"tetap cetak {total_sisa} pcs untuk orderan ini (WIP info-only).",
                     "kuning"
                 )
 

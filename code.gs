@@ -1,9 +1,31 @@
 /**
- * SISTEM MANAJEMEN GUDANG STIKER - V10.0
+ * SISTEM MANAJEMEN GUDANG STIKER - V10.2
  *
  * File ini adalah Google Apps Script yang harus di-paste ke editor Apps Script
  * di Google Spreadsheet (Extensions → Apps Script). File ini disimpan di repo
  * sebagai referensi versi dan dokumentasi.
+ *
+ * Tambahan v10.2 (dari v10.1):
+ *   - Sheet PERMINTAAN_RESTOCK dapat kolom baru J "Jumlah_Aktual_Gudang"
+ *     (diisi tim gudang saat verifikasi fisik — nilai FINAL untuk LOG_MASUK).
+ *     Print aktual ≠ gudang aktual (cth: cetak 1000 pcs, masuk gudang 900 pcs
+ *     karena defect/cutting waste). Yang ditulis ke LOG_MASUK = gudang_aktual,
+ *     fallback ke print_aktual, lalu request.
+ *   - Kolom lain bergeser: Approve J→K, Tgl_Approve K→L, Catatan L→M.
+ *   - setupPermintaanRestockSheet handle migrasi 2-step idempotent: insert
+ *     Jml_Bundle (D) dan insert Jumlah_Aktual_Gudang (J) sesuai kebutuhan.
+ *
+ * Tambahan v10.1 (dari v10.0):
+ *   - Sheet PERMINTAAN_RESTOCK dapat kolom baru D "Jml_Bundle" (auto-formula
+ *     =ROUNDUP(C/10)). 1 bundle = 10 pcs, info untuk tim gudang.
+ *   - setupPermintaanRestockSheet handle migrasi otomatis insertColumnBefore(4)
+ *     kalau sheet lama belum punya kolom Jml_Bundle.
+ *   - Kolom lain bergeser: Status E→F, Mulai_Print F→G, Operator G→H,
+ *     Aktual H→I, Approve I→J, Tgl_Approve J→K, Catatan K→L.
+ *   - WIP TIDAK lagi dikurangi dari kekurangan di sheet "Pesanan". Tim produksi
+ *     prioritas orderan dulu (cetak baru kalau stok kurang). WIP Pcs tetap
+ *     tampil sebagai info di kolom L. Status keterangan kembali 2 saja:
+ *     "Ambil Gudang" / "Produksi" (status "Tunggu WIP" dihapus).
  *
  * Tambahan v10.0 (dari v9.1):
  *   - REWORK alur restock — sebelumnya tim PRINT yg input, sekarang tim
@@ -86,21 +108,24 @@ const PERMINTAAN_RESTOCK_SHEET_NAME = "PERMINTAAN_RESTOCK";
 const PERMINTAAN_RESTOCK_HEADER = [
   "Tanggal_Request",          // A — auto-fill by onEdit saat gudang submit
   "SKU",                      // B — gudang isi (ID Master)
-  "Jumlah_Request",           // C — gudang isi
-  "Requester",                // D — gudang isi (nama)
-  "Status",                   // E — auto/dropdown: pending/in_progress/menunggu_approval/approved/rejected/dibatalkan
-  "Tanggal_Mulai_Print",      // F — diisi app.py saat klik 'Mulai Produksi'
-  "Print_Operator",           // G — diisi app.py
-  "Jumlah_Print_Aktual",      // H — diisi app.py saat klik 'Selesai Produksi'
-  "Approve",                  // I — checkbox untuk gudang
-  "Tanggal_Approve",          // J — auto-fill onEdit saat I=TRUE
-  "Catatan"                   // K — opsional
+  "Jumlah_Request",           // C — gudang isi (satuan pcs)
+  "Jml_Bundle",               // D — auto-formula =ROUNDUP(C/10) — 1 bundle = 10 pcs (info gudang)
+  "Requester",                // E — gudang isi (nama)
+  "Status",                   // F — auto/dropdown: pending/in_progress/menunggu_approval/approved/rejected/dibatalkan
+  "Tanggal_Mulai_Print",      // G — diisi app.py saat klik 'Mulai Produksi'
+  "Print_Operator",           // H — diisi app.py
+  "Jumlah_Print_Aktual",      // I — diisi app.py saat klik 'Selesai Produksi' (qty cetak)
+  "Jumlah_Aktual_Gudang",     // J — diisi gudang saat verifikasi fisik (qty FINAL masuk gudang)
+  "Approve",                  // K — checkbox untuk gudang
+  "Tanggal_Approve",          // L — auto-fill onEdit saat K=TRUE
+  "Catatan"                   // M — opsional
 ];
 const RESTOCK_STATUS_VALUES = [
   "pending", "in_progress", "menunggu_approval",
   "approved", "rejected", "dibatalkan"
 ];
 const RESTOCK_WIP_STATUSES = new Set(["pending", "in_progress", "menunggu_approval"]);
+const RESTOCK_BUNDLE_PCS = 10;  // 1 bundle (plastik kecil gudang) = 10 pcs
 const LOG_MASUK_SHEET_NAME = "LOG_MASUK";
 
 const MARKETPLACE_PREFIXES = {
@@ -139,9 +164,28 @@ function setupPermintaanRestockSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName(PERMINTAAN_RESTOCK_SHEET_NAME);
   let created = false;
+  const migrationNotes = [];
   if (!sheet) {
     sheet = ss.insertSheet(PERMINTAAN_RESTOCK_SHEET_NAME);
     created = true;
+  }
+
+  // === Migrasi otomatis (idempotent) ===
+  if (!created) {
+    // Step 1: Insert Jml_Bundle di kolom D kalau belum ada.
+    const hdrD = String(sheet.getRange(1, 4).getValue() || '').toLowerCase().trim();
+    if (hdrD && hdrD.indexOf("bundle") < 0) {
+      sheet.insertColumnBefore(4);
+      migrationNotes.push('kolom D "Jml_Bundle" di-insert');
+    }
+    // Step 2: Insert Jumlah_Aktual_Gudang di kolom J kalau belum ada.
+    // Setelah step 1, layout sudah punya 12 kolom. J = "Approve" (old v10.1)
+    // atau sudah "Jumlah_Aktual_Gudang" (v10.2+). Cek dari header.
+    const hdrJ = String(sheet.getRange(1, 10).getValue() || '').toLowerCase().trim();
+    if (hdrJ && hdrJ.indexOf("aktual_gudang") < 0 && hdrJ.indexOf("gudang") < 0) {
+      sheet.insertColumnBefore(10);
+      migrationNotes.push('kolom J "Jumlah_Aktual_Gudang" di-insert');
+    }
   }
 
   const numCols = PERMINTAAN_RESTOCK_HEADER.length;
@@ -153,48 +197,85 @@ function setupPermintaanRestockSheet() {
        .setHorizontalAlignment("center");
   sheet.setFrozenRows(1);
 
-  // Status dropdown (kol E, index 5) untuk row 2..1000
+  // Status dropdown (kol F, index 6) untuk row 2..1000
   const statusRule = SpreadsheetApp.newDataValidation()
       .requireValueInList(RESTOCK_STATUS_VALUES, true)
       .setAllowInvalid(false)
       .build();
-  sheet.getRange(2, 5, 999, 1).setDataValidation(statusRule);
+  sheet.getRange(2, 6, 999, 1).setDataValidation(statusRule);
 
-  // Approve checkbox (kol I, index 9) untuk row 2..1000
+  // Approve checkbox (kol K, index 11) untuk row 2..1000
   const checkboxRule = SpreadsheetApp.newDataValidation().requireCheckbox().build();
-  sheet.getRange(2, 9, 999, 1).setDataValidation(checkboxRule);
+  sheet.getRange(2, 11, 999, 1).setDataValidation(checkboxRule);
+
+  // Kolom D = Jml_Bundle (auto-formula, 1 bundle = 10 pcs, dibulatkan ke atas).
+  const bundleFormulas = [];
+  for (let i = 2; i <= 1000; i++) {
+    bundleFormulas.push([`=IF(C${i}="","",ROUNDUP(C${i}/${RESTOCK_BUNDLE_PCS}))`]);
+  }
+  sheet.getRange(2, 4, bundleFormulas.length, 1).setFormulas(bundleFormulas);
+  sheet.getRange(2, 4, 999, 1)
+       .setBackground("#e8f0fe")
+       .setHorizontalAlignment("center")
+       .setFontStyle("italic");
+
+  // Highlight kolom Jumlah_Aktual_Gudang (J=10) — input gudang, beda dari print aktual.
+  sheet.getRange(2, 10, 999, 1)
+       .setBackground("#fff7ed")
+       .setHorizontalAlignment("center");
 
   // Column widths
   sheet.setColumnWidth(1, 160); // Tanggal_Request
   sheet.setColumnWidth(2, 80);  // SKU
   sheet.setColumnWidth(3, 110); // Jumlah_Request
-  sheet.setColumnWidth(4, 120); // Requester
-  sheet.setColumnWidth(5, 140); // Status
-  sheet.setColumnWidth(6, 160); // Tanggal_Mulai_Print
-  sheet.setColumnWidth(7, 130); // Print_Operator
-  sheet.setColumnWidth(8, 130); // Jumlah_Print_Aktual
-  sheet.setColumnWidth(9, 80);  // Approve
-  sheet.setColumnWidth(10, 160);// Tanggal_Approve
-  sheet.setColumnWidth(11, 200);// Catatan
+  sheet.setColumnWidth(4, 95);  // Jml_Bundle
+  sheet.setColumnWidth(5, 120); // Requester
+  sheet.setColumnWidth(6, 140); // Status
+  sheet.setColumnWidth(7, 160); // Tanggal_Mulai_Print
+  sheet.setColumnWidth(8, 130); // Print_Operator
+  sheet.setColumnWidth(9, 140); // Jumlah_Print_Aktual
+  sheet.setColumnWidth(10, 150);// Jumlah_Aktual_Gudang
+  sheet.setColumnWidth(11, 80); // Approve
+  sheet.setColumnWidth(12, 160);// Tanggal_Approve
+  sheet.setColumnWidth(13, 200);// Catatan
+
+  let setupMsg;
+  if (created) {
+    setupMsg = 'Sheet baru dibuat.';
+  } else if (migrationNotes.length > 0) {
+    setupMsg = 'Sheet sudah ada — migrasi: ' + migrationNotes.join(', ') + '.';
+  } else {
+    setupMsg = 'Sheet sudah ada, header/validasi/formula di-refresh.';
+  }
 
   ui.alert(
     'Setup Sheet PERMINTAAN_RESTOCK',
-    (created ? 'Sheet baru dibuat.' : 'Sheet sudah ada, header/validasi di-refresh.') +
+    setupMsg +
     '\n\nAlur:\n' +
-    '1. Gudang isi kolom B (SKU), C (Jumlah_Request), D (Requester) di row baru.\n' +
+    '1. Gudang isi kolom B (SKU), C (Jumlah_Request — pcs), E (Requester) di row baru.\n' +
+    '   → Kolom D (Jml_Bundle = pcs/10, dibulatkan ke atas) otomatis terisi via formula.\n' +
     '   → Tanggal_Request & Status=pending otomatis terisi.\n' +
     '2. Tim print buka app.py Tab 6 → "Mulai Produksi" → status in_progress.\n' +
-    '3. Tim print selesai → "Selesai Produksi" + input jumlah aktual → status menunggu_approval.\n' +
-    '4. Gudang verifikasi fisik → centang Approve checkbox di kolom I.\n' +
-    '   → Otomatis ditulis ke LOG_MASUK + status=approved + Tanggal_Approve auto.',
+    '3. Tim print selesai → "Selesai Produksi" + input jumlah aktual cetak (kolom I).\n' +
+    '   → Status menunggu_approval.\n' +
+    '4. Gudang verifikasi fisik:\n' +
+    '   a) Isi kolom J (Jumlah_Aktual_Gudang) — pcs yg BENAR2 masuk gudang.\n' +
+    '      Kosongkan kalau sama dgn print aktual.\n' +
+    '   b) Centang Approve checkbox di kolom K.\n' +
+    '   → Otomatis ditulis ke LOG_MASUK pakai gudang_aktual (fallback ke print_aktual,\n' +
+    '     lalu request) + status=approved + Tanggal_Approve auto.\n\n' +
+    'Catatan: WIP (status pending/in_progress/menunggu_approval) sekarang HANYA info — tim print\n' +
+    'tetap cetak orderan walaupun ada WIP. Lihat sheet "Pesanan" kolom "WIP Pcs" sebagai info.',
     ui.ButtonSet.OK
   );
 }
 
 /**
  * Simple onEdit trigger — auto-handle 2 event di sheet PERMINTAAN_RESTOCK:
- *  (A) Gudang isi row baru (kolom B/C/D filled) → auto-set Tanggal_Request & Status=pending.
- *  (B) Gudang centang Approve checkbox (kolom I) → tulis LOG_MASUK + set approved + Tanggal_Approve.
+ *  (A) Gudang isi row baru (kolom B/C/E filled) → auto-set Tanggal_Request & Status=pending.
+ *      Kolom D (Jml_Bundle) auto-formula, di-skip dari trigger.
+ *  (B) Gudang centang Approve checkbox (kolom K) → tulis LOG_MASUK pakai Jumlah_Aktual_Gudang
+ *      (fallback Jumlah_Print_Aktual → Jumlah_Request) + set approved + Tanggal_Approve.
  *
  * Catatan: simple trigger jalan dgn auth user yg edit. Tulis ke sheet
  * lain di spreadsheet yang sama (LOG_MASUK) tetap allowed.
@@ -213,45 +294,56 @@ function onEdit(e) {
     const tz = ss.getSpreadsheetTimeZone();
     const now = Utilities.formatDate(new Date(), tz, "yyyy-MM-dd HH:mm:ss");
 
-    // --- Event A: Submit baru dari gudang (edit di kol B/C/D) ---
-    if (col >= 2 && col <= 4) {
-      const rowVals = sheet.getRange(row, 1, 1, 5).getValues()[0];
+    // --- Event A: Submit baru dari gudang (edit di kol B/C/E — skip D yg formula) ---
+    if (col === 2 || col === 3 || col === 5) {
+      const rowVals = sheet.getRange(row, 1, 1, 6).getValues()[0];
       const tanggal = rowVals[0];
       const sku = String(rowVals[1] || '').trim();
       const jumlah = rowVals[2];
-      const requester = String(rowVals[3] || '').trim();
-      const status = String(rowVals[4] || '').trim();
-      // Auto-fill kalau B+C+D sudah lengkap dan A/E masih kosong
+      // rowVals[3] = Jml_Bundle (formula, abaikan)
+      const requester = String(rowVals[4] || '').trim();
+      const status = String(rowVals[5] || '').trim();
+      // Auto-fill kalau B+C+E sudah lengkap dan A/F masih kosong
       if (sku && jumlah !== '' && jumlah !== null && requester) {
         if (!tanggal) sheet.getRange(row, 1).setValue(now);
-        if (!status) sheet.getRange(row, 5).setValue("pending");
+        if (!status) sheet.getRange(row, 6).setValue("pending");
       }
       return;
     }
 
-    // --- Event B: Approve checkbox centang (kol I = 9) ---
-    if (col === 9) {
+    // --- Event B: Approve checkbox centang (kol K = 11) ---
+    if (col === 11) {
       const checkboxVal = e.range.getValue();
       if (checkboxVal !== true) return;
 
       const rowVals = sheet.getRange(row, 1, 1, PERMINTAAN_RESTOCK_HEADER.length).getValues()[0];
-      const status = String(rowVals[4] || '').toLowerCase().trim();
+      const status = String(rowVals[5] || '').toLowerCase().trim();
       if (status !== 'menunggu_approval') {
-        // Status belum siap di-approve — reset checkbox + warning di catatan
+        // Status belum siap di-approve — reset checkbox + warning di catatan (kol M = 13)
         e.range.setValue(false);
-        sheet.getRange(row, 11).setValue(
+        sheet.getRange(row, 13).setValue(
           'Approve di-skip: status saat ini "' + status + '" (perlu menunggu_approval)'
         );
         return;
       }
 
       const sku = String(rowVals[1] || '').trim();
-      const pcsAktual = parseFloat(rowVals[7]);
+      // Priority pcs final: Jumlah_Aktual_Gudang (kol J = idx 9) >
+      //                     Jumlah_Print_Aktual (kol I = idx 8) > Jumlah_Request (kol C = idx 2)
+      const pcsGudang = parseFloat(rowVals[9]);
+      const pcsPrint = parseFloat(rowVals[8]);
       const pcsRequest = parseFloat(rowVals[2]);
-      const pcs = !isNaN(pcsAktual) && pcsAktual > 0 ? pcsAktual : pcsRequest;
+      let pcs, sumber;
+      if (!isNaN(pcsGudang) && pcsGudang > 0) {
+        pcs = pcsGudang; sumber = "gudang_aktual";
+      } else if (!isNaN(pcsPrint) && pcsPrint > 0) {
+        pcs = pcsPrint; sumber = "print_aktual";
+      } else {
+        pcs = pcsRequest; sumber = "request";
+      }
       if (!sku || isNaN(pcs) || pcs <= 0) {
         e.range.setValue(false);
-        sheet.getRange(row, 11).setValue('Approve di-skip: SKU/jumlah tidak valid');
+        sheet.getRange(row, 13).setValue('Approve di-skip: SKU/jumlah tidak valid');
         return;
       }
 
@@ -259,7 +351,7 @@ function onEdit(e) {
       const wsLogMasuk = ss.getSheetByName(LOG_MASUK_SHEET_NAME);
       if (!wsLogMasuk) {
         e.range.setValue(false);
-        sheet.getRange(row, 11).setValue(
+        sheet.getRange(row, 13).setValue(
           'Approve di-skip: sheet ' + LOG_MASUK_SHEET_NAME + ' tidak ditemukan'
         );
         return;
@@ -271,11 +363,11 @@ function onEdit(e) {
       }
       nextRow = nextRow + 1;
       if (nextRow < 2) nextRow = 2;
-      wsLogMasuk.getRange(nextRow, 2, 1, 3).setValues([[sku, pcs, "Restock oleh Sistem"]]);
+      wsLogMasuk.getRange(nextRow, 2, 1, 3).setValues([[sku, pcs, "Restock oleh Sistem (" + sumber + ")"]]);
 
-      // Update status & tanggal approve
-      sheet.getRange(row, 5).setValue("approved");
-      sheet.getRange(row, 10).setValue(now);
+      // Update status (kol F = 6) & tanggal approve (kol L = 12)
+      sheet.getRange(row, 6).setValue("approved");
+      sheet.getRange(row, 12).setValue(now);
     }
   } catch (err) {
     // Simple trigger: error di-suppress supaya tidak block edit user.
@@ -523,8 +615,12 @@ function processUploadedFile(base64Content, fileName) {
     result += `\n⚠️ Sheet LIST_PESANAN belum dibuat — pesanan tidak diteruskan ke QC.`;
   }
   if (pesananStats) {
-    result += `\n+ Sheet "Pesanan" di-refresh: ${pesananStats.total} baris ` +
-      `(Ambil Gudang ${pesananStats.ambil}, Tunggu WIP ${pesananStats.tunggu_wip}, Produksi ${pesananStats.produksi}).`;
+    let pesananMsg = `\n+ Sheet "Pesanan" di-refresh: ${pesananStats.total} baris ` +
+      `(Ambil Gudang ${pesananStats.ambil}, Produksi ${pesananStats.produksi}).`;
+    if (pesananStats.info_wip > 0) {
+      pesananMsg += ` Catatan: ${pesananStats.info_wip} baris Produksi punya WIP paralel (info-only di kolom WIP Pcs).`;
+    }
+    result += pesananMsg;
   }
   return result;
 }
@@ -706,7 +802,9 @@ function loadStockMap(ss) {
 function loadWipMap(ss) {
   // Total WIP per SKU dari PERMINTAAN_RESTOCK — semua row yg statusnya
   // masih dalam pipeline produksi (pending/in_progress/menunggu_approval).
-  // Pcs prioritize Jumlah_Print_Aktual (kol H) kalau sudah diisi, fallback ke Jumlah_Request (kol C).
+  // Pcs prioritize Jumlah_Print_Aktual (kol I = idx 8) kalau sudah diisi,
+  // fallback ke Jumlah_Request (kol C = idx 2).
+  // Catatan v10.x: WIP HANYA info — tidak lagi dikurangi dari kekurangan di sheet "Pesanan".
   const sheet = ss.getSheetByName(PERMINTAAN_RESTOCK_SHEET_NAME);
   const wipMap = {};
   if (!sheet) return wipMap;
@@ -715,9 +813,9 @@ function loadWipMap(ss) {
   const data = sheet.getRange(2, 1, lastRow - 1, PERMINTAAN_RESTOCK_HEADER.length).getValues();
   for (let i = 0; i < data.length; i++) {
     const sku = String(data[i][1] || '').trim();
-    const status = String(data[i][4] || '').toLowerCase().trim();
+    const status = String(data[i][5] || '').toLowerCase().trim();  // kol F Status
     if (!sku || !RESTOCK_WIP_STATUSES.has(status)) continue;
-    const pcsAktual = parseFloat(data[i][7]);  // kol H Jumlah_Print_Aktual
+    const pcsAktual = parseFloat(data[i][8]);  // kol I Jumlah_Print_Aktual
     const pcsRequest = parseFloat(data[i][2]); // kol C Jumlah_Request
     const pcs = !isNaN(pcsAktual) && pcsAktual > 0 ? pcsAktual : pcsRequest;
     if (isNaN(pcs) || pcs <= 0) continue;
@@ -742,16 +840,16 @@ function populatePesananSheet(orders, ss) {
        .setHorizontalAlignment("center");
   sheet.setFrozenRows(1);
 
-  const stats = { total: orders.length, ambil: 0, tunggu_wip: 0, produksi: 0 };
+  const stats = { total: orders.length, ambil: 0, produksi: 0, info_wip: 0 };
   if (orders.length === 0) return stats;
 
-  // FIFO 3-tier allocation per-row: Stok Aktif → WIP → Produksi baru.
-  // stockMap & wipMap di-deplete saat baris pakai resources-nya;
-  // wipOriginal disimpan untuk display total awal di kolom L.
+  // Allocation 2-tier per-row: Stok Aktif → Produksi baru.
+  // v10.x: WIP TIDAK lagi dipakai untuk allocation. Tim produksi prioritas
+  // orderan dulu (cetak baru kalau stok kurang), restock dikerjakan saat
+  // permintaan menurun. WIP Pcs di sheet tetap muncul HANYA sebagai info
+  // — bukan pengurang kekurangan.
   const stockMap = loadStockMap(ss);
-  const wipMap = loadWipMap(ss);
-  const wipOriginal = {};
-  for (const k in wipMap) wipOriginal[k] = wipMap[k];
+  const wipMap = loadWipMap(ss);  // hanya untuk display di kolom WIP Pcs
 
   const rows = [];
   const ketBackgrounds = [];
@@ -759,29 +857,18 @@ function populatePesananSheet(orders, ss) {
   for (const o of orders) {
     const need = o.jumlahPcs;
     const stokAvail = stockMap[o.idMaster] || 0;
-    const wipAvail = wipMap[o.idMaster] || 0;
 
-    // 3-tier allocation
     const ambilStok = Math.min(stokAvail, need);
-    const sisaAfterStok = need - ambilStok;
-    const ambilWip = Math.min(wipAvail, sisaAfterStok);
-    const sisaProduksi = sisaAfterStok - ambilWip;
-
+    const sisaProduksi = need - ambilStok;
     stockMap[o.idMaster] = stokAvail - ambilStok;
-    wipMap[o.idMaster] = wipAvail - ambilWip;
 
-    // Keterangan = source dominan (Produksi > Tunggu WIP > Ambil Gudang)
+    // 2 status saja: Ambil Gudang / Produksi. WIP info tampil di kolom WIP Pcs.
     let keterangan, kekurangan, bg;
     if (sisaProduksi > 0) {
       keterangan = "Produksi";
       kekurangan = sisaProduksi;
       bg = "#f4cccc";  // merah muda
       stats.produksi++;
-    } else if (ambilWip > 0) {
-      keterangan = "Tunggu WIP";
-      kekurangan = 0;
-      bg = "#fff2cc";  // kuning
-      stats.tunggu_wip++;
     } else {
       keterangan = "Ambil Gudang";
       kekurangan = 0;
@@ -789,8 +876,9 @@ function populatePesananSheet(orders, ss) {
       stats.ambil++;
     }
 
-    // Kolom WIP Pcs = total WIP awal per SKU (info kapasitas pending)
-    const wipDisplay = wipOriginal[o.idMaster] || 0;
+    // Kolom WIP Pcs = total pcs WIP per SKU (info-only; bukan pengurang).
+    const wipDisplay = wipMap[o.idMaster] || 0;
+    if (wipDisplay > 0 && sisaProduksi > 0) stats.info_wip++;
 
     rows.push([
       o.resi, o.sku, o.qty,
@@ -802,7 +890,7 @@ function populatePesananSheet(orders, ss) {
   }
 
   sheet.getRange(2, 1, rows.length, PESANAN_HEADER.length).setValues(rows);
-  // Highlight kolom Keterangan: hijau = Ambil Gudang, kuning = Tunggu WIP, merah-muda = Produksi
+  // Highlight kolom Keterangan: hijau = Ambil Gudang, merah-muda = Produksi
   sheet.getRange(2, 10, ketBackgrounds.length, 1).setBackgrounds(ketBackgrounds);
 
   return stats;
