@@ -49,7 +49,7 @@ RESTOCK_LEMBAR_PCS = 100   # 1 lembar cetak (versi optimal) = 100 pcs
 class BotApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Bot Sortir Stiker & Gudang v10.6")
+        self.title("Bot Sortir Stiker & Gudang v10.7")
         self.geometry("850x700")
 
         self.config_data = self.load_config()
@@ -518,6 +518,10 @@ class BotApp(ctk.CTk):
 
         tasks = []
         skipped = []
+        non_stiker_stats = {
+            "sheet": {"unique": set(), "pesanan": 0, "pcs": 0},
+            "gantungan_kunci": {"unique": set(), "pesanan": 0, "pcs": 0},
+        }
         for row_idx in range(2, ws.max_row + 1):
             sku_val = ws.cell(row_idx, 1).value
             jml_val = ws.cell(row_idx, 2).value
@@ -528,7 +532,18 @@ class BotApp(ctk.CTk):
                 continue
             sku_str = str(sku_val).strip()
             # Skip SKU produk non-stiker (stiker sheet '-VN-', gantungan kunci 'GK-')
-            if self.is_non_stiker_sku(sku_str):
+            kategori = self.non_stiker_category(sku_str)
+            if kategori is not None:
+                try:
+                    pcs_for_stat = int(jml_val)
+                except (ValueError, TypeError):
+                    try:
+                        pcs_for_stat = int(float(jml_val))
+                    except (ValueError, TypeError):
+                        pcs_for_stat = 0
+                non_stiker_stats[kategori]["unique"].add(sku_str)
+                non_stiker_stats[kategori]["pesanan"] += 1
+                non_stiker_stats[kategori]["pcs"] += pcs_for_stat
                 skipped.append((sku_str, str(jml_val), "Skip - SKU produk non-stiker (sheet/GK)"))
                 continue
             m = re.match(r'^(\d+)', sku_str)
@@ -621,6 +636,24 @@ class BotApp(ctk.CTk):
             for r in fail_logs:
                 ws_f.append(r)
             wb_f.save(os.path.join(log_dir, "gagal.xlsx"))
+
+        # Summary SKU produk non-stiker yg di-skip (kalau ada)
+        sheet_stats = non_stiker_stats["sheet"]
+        gk_stats = non_stiker_stats["gantungan_kunci"]
+        if sheet_stats["pesanan"] > 0 or gk_stats["pesanan"] > 0:
+            self.log_kekurangan("\n[INFO] Produk non-stiker yang di-skip (tidak dicetak):", "kuning")
+            if sheet_stats["pesanan"] > 0:
+                self.log_kekurangan(
+                    f"  • Stiker SHEET: {len(sheet_stats['unique'])} SKU unik, "
+                    f"{sheet_stats['pesanan']} baris ({sheet_stats['pcs']} pcs total)",
+                    "kuning"
+                )
+            if gk_stats["pesanan"] > 0:
+                self.log_kekurangan(
+                    f"  • Gantungan KUNCI: {len(gk_stats['unique'])} SKU unik, "
+                    f"{gk_stats['pesanan']} baris ({gk_stats['pcs']} pcs total)",
+                    "kuning"
+                )
 
         self.log_kekurangan(f"\n[SELESAI] {len(success_logs)} SKU sukses, {len(fail_logs)} gagal/skip.", "info")
         self.log_kekurangan(f"[INFO] Output disimpan di: {output_dir}", "info")
@@ -1208,14 +1241,20 @@ class BotApp(ctk.CTk):
           jangan masuk pipeline cetak.
         - Gantungan KUNCI → prefix 'GK-' (cth: 'GK-ATM-0010752-L').
         """
+        return BotApp.non_stiker_category(sku) is not None
+
+    @staticmethod
+    def non_stiker_category(sku):
+        """Return 'sheet' kalau SKU = stiker sheet '-VN-', 'gantungan_kunci' kalau prefix
+        'GK-', else None (= stiker reguler, boleh diproses)."""
         if not sku:
-            return False
+            return None
         s = str(sku).strip().upper()
         if s.startswith("GK-"):
-            return True
+            return "gantungan_kunci"
         if "-VN-" in s:
-            return True
-        return False
+            return "sheet"
+        return None
 
     def extract_numeric_id_and_pcs(self, sku):
         id_match = re.match(r'^\d+', sku.strip())
@@ -1272,14 +1311,20 @@ class BotApp(ctk.CTk):
         
         task_list = []
         fail_logs = []
-        
+        # Counter SKU produk non-stiker yg di-skip (untuk summary di akhir proses).
+        # {category: {"unique": set(sku), "pesanan": total_baris, "pcs": total_qty}}
+        non_stiker_stats = {
+            "sheet": {"unique": set(), "pesanan": 0, "pcs": 0},
+            "gantungan_kunci": {"unique": set(), "pesanan": 0, "pcs": 0},
+        }
+
         for row_idx in range(2, ws.max_row + 1):
             resi_val = ws.cell(row_idx, 1).value
             sku_val = ws.cell(row_idx, 2).value
             jml_val = ws.cell(row_idx, 3).value
-            
+
             if not sku_val or not jml_val: continue
-                
+
             try:
                 jumlah_pesanan = int(jml_val)
                 original_sku = str(sku_val).strip()
@@ -1288,7 +1333,11 @@ class BotApp(ctk.CTk):
                 continue
 
             # Skip SKU produk non-stiker (stiker sheet '-VN-', gantungan kunci 'GK-')
-            if self.is_non_stiker_sku(original_sku):
+            kategori = self.non_stiker_category(original_sku)
+            if kategori is not None:
+                non_stiker_stats[kategori]["unique"].add(original_sku)
+                non_stiker_stats[kategori]["pesanan"] += 1
+                non_stiker_stats[kategori]["pcs"] += jumlah_pesanan
                 fail_logs.append((original_sku, str(jml_val), "Skip - SKU produk non-stiker (sheet/gantungan kunci), tidak dicetak."))
                 continue
 
@@ -1547,6 +1596,29 @@ class BotApp(ctk.CTk):
             wb_warn.save(os.path.join(LOG_PERINGATAN_DIR, f"peringatan_{timestamp}.xlsx"))
 
         self.progress.set(1.0)
+
+        # Summary SKU produk non-stiker yg di-skip (kalau ada)
+        sheet_stats = non_stiker_stats["sheet"]
+        gk_stats = non_stiker_stats["gantungan_kunci"]
+        if sheet_stats["pesanan"] > 0 or gk_stats["pesanan"] > 0:
+            self.log_gui("\n[INFO] Produk non-stiker yang di-skip (tidak dicetak):", "kuning")
+            if sheet_stats["pesanan"] > 0:
+                self.log_gui(
+                    f"  • Stiker SHEET: {len(sheet_stats['unique'])} SKU unik, "
+                    f"{sheet_stats['pesanan']} baris pesanan ({sheet_stats['pcs']} pcs total)",
+                    "kuning"
+                )
+            if gk_stats["pesanan"] > 0:
+                self.log_gui(
+                    f"  • Gantungan KUNCI: {len(gk_stats['unique'])} SKU unik, "
+                    f"{gk_stats['pesanan']} baris pesanan ({gk_stats['pcs']} pcs total)",
+                    "kuning"
+                )
+            self.log_gui(
+                "  → Detail SKU per-baris ada di log/gagal/gagal_*.xlsx (keterangan 'Skip').",
+                "info"
+            )
+
         self.log_gui("\n[SELESAI] Proses telah selesai.", "info")
 
 if __name__ == "__main__":
