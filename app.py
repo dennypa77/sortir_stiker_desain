@@ -527,6 +527,10 @@ class BotApp(ctk.CTk):
                 skipped.append((str(sku_val) if sku_val else "", str(jml_val) if jml_val else "", "Kolom kosong"))
                 continue
             sku_str = str(sku_val).strip()
+            # Skip SKU produk non-stiker (stiker sheet '-VN-', gantungan kunci 'GK-')
+            if self.is_non_stiker_sku(sku_str):
+                skipped.append((sku_str, str(jml_val), "Skip - SKU produk non-stiker (sheet/GK)"))
+                continue
             m = re.match(r'^(\d+)', sku_str)
             if not m:
                 skipped.append((sku_str, str(jml_val), "SKU tidak diawali angka"))
@@ -1033,16 +1037,19 @@ class BotApp(ctk.CTk):
                 except ValueError: continue
                 
                 original_sku = str(sku_val).strip()
+                # Skip SKU produk non-stiker (stiker sheet '-VN-', gantungan kunci 'GK-')
+                if self.is_non_stiker_sku(original_sku):
+                    continue
                 numeric_id, pcs_per_paket = self.extract_numeric_id_and_pcs(original_sku)
                 if not numeric_id: continue
-                
+
                 total_pcs_needed = pcs_per_paket * jumlah_pesanan
                 scan_db[str(resi_val).strip()].append({
                     "sku": original_sku,
                     "numeric_id": numeric_id,
                     "total_pcs_needed": total_pcs_needed
                 })
-                
+
             self.scanner_db = scan_db
 
             # Load WIP map (info-only — tidak dihitung sebagai stok available)
@@ -1192,6 +1199,24 @@ class BotApp(ctk.CTk):
             self.log_gui(f"Error: MASTER_FOLDER tidak ditemukan.", "merah")
             return None
 
+    @staticmethod
+    def is_non_stiker_sku(sku):
+        """Return True kalau SKU bukan stiker reguler (harus di-skip dari duplicate/cetak).
+
+        Pola produk lain yang kami tidak proses:
+        - Stiker SHEET → mengandung '-VN-' (cth: '136-VN-A6-A'). Tidak ada multiplier pcs,
+          jangan masuk pipeline cetak.
+        - Gantungan KUNCI → prefix 'GK-' (cth: 'GK-ATM-0010752-L').
+        """
+        if not sku:
+            return False
+        s = str(sku).strip().upper()
+        if s.startswith("GK-"):
+            return True
+        if "-VN-" in s:
+            return True
+        return False
+
     def extract_numeric_id_and_pcs(self, sku):
         id_match = re.match(r'^\d+', sku.strip())
         numeric_id = id_match.group(0) if id_match else None
@@ -1261,7 +1286,12 @@ class BotApp(ctk.CTk):
             except ValueError:
                 fail_logs.append((str(sku_val), str(jml_val), f"Gagal - 'Jumlah' harus angka"))
                 continue
-                
+
+            # Skip SKU produk non-stiker (stiker sheet '-VN-', gantungan kunci 'GK-')
+            if self.is_non_stiker_sku(original_sku):
+                fail_logs.append((original_sku, str(jml_val), "Skip - SKU produk non-stiker (sheet/gantungan kunci), tidak dicetak."))
+                continue
+
             numeric_id, pcs_per_paket = self.extract_numeric_id_and_pcs(original_sku)
             if not numeric_id:
                 fail_logs.append((original_sku, str(jml_val), "Gagal - Tidak ada ID (angka awal) terdeteksi."))

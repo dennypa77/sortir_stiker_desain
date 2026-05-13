@@ -719,6 +719,11 @@ function processUploadedFile(base64Content, fileName) {
     }
     if (!sku || qty === 0) continue;
 
+    // Skip SKU produk non-stiker (stiker sheet '-VN-', gantungan kunci 'GK-')
+    // — tidak masuk DATA_SALES, LIST_PESANAN, atau Pesanan supaya pipeline cetak
+    // & QC fokus ke stiker saja.
+    if (isNonStikerSku(sku)) continue;
+
     const idMatch  = sku.match(/^(\d+)/);
     const idMaster = idMatch ? idMatch[1] : sku;
     const pcsMatch = sku.toLowerCase().match(/-(\d+)pcs/);
@@ -882,6 +887,23 @@ function detectMarketplace(resi) {
     if (r.startsWith(p)) return MARKETPLACE_PREFIXES[p];
   }
   return 'Unknown';
+}
+
+/**
+ * Return true kalau SKU bukan stiker reguler (harus di-skip dari pipeline cetak).
+ *
+ * Produk yang kami SKIP:
+ *   - Stiker SHEET → mengandung '-VN-' (cth: '136-VN-A6-A'). Tidak punya
+ *     multiplier pcs, kalau di-treat sbg stiker biasa akan jadi "136 × 1 pcs"
+ *     yang salah & pollute DATA_SALES + Pesanan.
+ *   - Gantungan KUNCI → prefix 'GK-' (cth: 'GK-ATM-0010752-L').
+ */
+function isNonStikerSku(sku) {
+  if (!sku) return false;
+  const s = String(sku).trim().toUpperCase();
+  if (s.indexOf("GK-") === 0) return true;
+  if (s.indexOf("-VN-") >= 0) return true;
+  return false;
 }
 
 /* ============================================================
