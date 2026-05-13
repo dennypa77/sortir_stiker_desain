@@ -151,6 +151,8 @@ function onOpen() {
       .addItem('4. Hapus LIST_PESANAN > ' + PURGE_DAYS + ' Hari', 'purgeOldListPesanan')
       .addSeparator()
       .addItem('5. Setup Sheet PERMINTAAN_RESTOCK', 'setupPermintaanRestockSheet')
+      .addSeparator()
+      .addItem('6. Proses Approval Pending (Manual)', 'processPendingApprovals')
       .addToUi();
 }
 
@@ -396,9 +398,134 @@ function onEdit(e) {
       sheet.getRange(row, 11).setValue(now);
     }
   } catch (err) {
-    // Simple trigger: error di-suppress supaya tidak block edit user.
-    // Untuk debug: console.log(err.toString());
+    // Simple trigger: log error tapi jangan block edit user.
+    // Cek "Executions" di Apps Script editor untuk lihat detail.
+    try {
+      Logger.log("onEdit error: " + err.toString() + "\nStack: " + (err.stack || "(no stack)"));
+      // Coba tulis ke Catatan column kalau memungkinkan
+      if (e && e.range) {
+        const sheetErr = e.range.getSheet();
+        if (sheetErr && sheetErr.getName() === PERMINTAAN_RESTOCK_SHEET_NAME) {
+          sheetErr.getRange(e.range.getRow(), 12).setValue('onEdit error: ' + err.toString());
+        }
+      }
+    } catch (logErr) {
+      // Last resort: console.log
+      try { console.log(err.toString()); } catch (e2) {}
+    }
   }
+}
+
+/**
+ * Fallback manual: scan semua row dgn Approve=TRUE + status=menunggu_approval
+ * dan eksekusi approval logic. Berguna kalau onEdit simple trigger nggak fire
+ * (mis. permission issue, atau user centang banyak checkbox sekaligus).
+ *
+ * Dipanggil dari menu "📦 Kelola Gudang → 6. Proses Approval Pending (Manual)".
+ */
+function processPendingApprovals() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(PERMINTAAN_RESTOCK_SHEET_NAME);
+  if (!sheet) {
+    ui.alert('Sheet ' + PERMINTAAN_RESTOCK_SHEET_NAME + ' tidak ditemukan.');
+    return;
+  }
+
+  // Cek sheet LOG_MASUK ada
+  const wsLogMasuk = ss.getSheetByName(LOG_MASUK_SHEET_NAME);
+  if (!wsLogMasuk) {
+    // List semua sheet untuk bantu user identify kalau salah nama
+    const allSheets = ss.getSheets().map(function(s) { return s.getName(); });
+    ui.alert(
+      'Sheet "' + LOG_MASUK_SHEET_NAME + '" tidak ditemukan',
+      'Yang ada di workbook ini:\n' + allSheets.join('\n') +
+      '\n\nKalau sheet log masuk kamu namanya beda (mis. "Log_Masuk" atau "log masuk"), ' +
+      'rename ke persis "' + LOG_MASUK_SHEET_NAME + '" (huruf besar semua).',
+      ui.ButtonSet.OK
+    );
+    return;
+  }
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    ui.alert('Belum ada baris data di sheet.');
+    return;
+  }
+
+  const tz = ss.getSpreadsheetTimeZone();
+  const now = Utilities.formatDate(new Date(), tz, "yyyy-MM-dd HH:mm:ss");
+  const data = sheet.getRange(2, 1, lastRow - 1, PERMINTAAN_RESTOCK_HEADER.length).getValues();
+
+  const candidates = [];  // {rowNum, sku, pcs, sumber}
+  const skipped = [];     // {rowNum, reason}
+
+  for (let i = 0; i < data.length; i++) {
+    const rowNum = i + 2;
+    const approveVal = data[i][9];          // kol J = idx 9
+    const status = String(data[i][5] || '').toLowerCase().trim();  // kol F = idx 5
+    if (approveVal !== true) continue;       // skip yg belum di-checklist
+    if (status === 'approved') continue;     // sudah selesai, skip
+    if (status !== 'menunggu_approval') {
+      skipped.push({ rowNum: rowNum, reason: 'status="' + status + '" (perlu menunggu_approval)' });
+      continue;
+    }
+    const sku = String(data[i][1] || '').trim();
+    const pcsGudang = parseFloat(data[i][8]);  // kol I = idx 8
+    const pcsRequest = parseFloat(data[i][2]); // kol C = idx 2
+    let pcs, sumber;
+    if (!isNaN(pcsGudang) && pcsGudang > 0) {
+      pcs = pcsGudang; sumber = "gudang_aktual";
+    } else {
+      pcs = pcsRequest; sumber = "request (gudang belum isi aktual)";
+    }
+    if (!sku || isNaN(pcs) || pcs <= 0) {
+      skipped.push({ rowNum: rowNum, reason: 'SKU/jumlah tidak valid (sku="' + sku + '", pcs=' + pcs + ')' });
+      continue;
+    }
+    candidates.push({ rowNum: rowNum, sku: sku, pcs: pcs, sumber: sumber });
+  }
+
+  if (candidates.length === 0 && skipped.length === 0) {
+    ui.alert('Tidak ada row yg perlu diproses.\n\nFilter: Approve=TRUE + Status=menunggu_approval.');
+    return;
+  }
+
+  // Cari nextRow di LOG_MASUK (sekali, batch insert)
+  const colB = wsLogMasuk.getRange("B:B").getValues();
+  let nextRow = 1;
+  for (let i = 0; i < colB.length; i++) {
+    if (colB[i][0] !== '' && colB[i][0] !== null) nextRow = i + 1;
+  }
+  nextRow = nextRow + 1;
+  if (nextRow < 2) nextRow = 2;
+
+  // Batch tulis ke LOG_MASUK
+  if (candidates.length > 0) {
+    const rowsToWrite = candidates.map(function(c) {
+      return [c.sku, c.pcs, "Restock oleh Sistem (" + c.sumber + ")"];
+    });
+    wsLogMasuk.getRange(nextRow, 2, rowsToWrite.length, 3).setValues(rowsToWrite);
+
+    // Update tiap row source: status approved + tanggal approve
+    for (const c of candidates) {
+      sheet.getRange(c.rowNum, 6).setValue("approved");
+      sheet.getRange(c.rowNum, 11).setValue(now);
+    }
+  }
+
+  let msg = 'Selesai!\n\n';
+  msg += '✅ ' + candidates.length + ' row di-approve & ditulis ke LOG_MASUK:\n';
+  for (const c of candidates) {
+    msg += '   • Row ' + c.rowNum + ': SKU ' + c.sku + ' = ' + c.pcs + ' pcs (' + c.sumber + ')\n';
+  }
+  if (skipped.length > 0) {
+    msg += '\n⚠ ' + skipped.length + ' row di-skip:\n';
+    for (const s of skipped) {
+      msg += '   • Row ' + s.rowNum + ': ' + s.reason + '\n';
+    }
+  }
+  ui.alert('Proses Approval Pending', msg, ui.ButtonSet.OK);
 }
 
 /* ============================================================
