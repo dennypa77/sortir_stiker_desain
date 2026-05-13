@@ -350,6 +350,12 @@ function onEdit(e) {
 
       const rowVals = sheet.getRange(row, 1, 1, PERMINTAAN_RESTOCK_HEADER.length).getValues()[0];
       const status = String(rowVals[5] || '').toLowerCase().trim();
+
+      // Idempotent: kalau status sudah "approved", anggap re-fire (simple + installable
+      // trigger kedua-duanya fire utk function `onEdit` yang sama — double-execution).
+      // No-op, biarkan checkbox tetap TRUE, jangan tulis catatan.
+      if (status === 'approved') return;
+
       if (status !== 'menunggu_approval') {
         // Status belum siap di-approve — reset checkbox + warning di catatan (kol L = 12)
         e.range.setValue(false);
