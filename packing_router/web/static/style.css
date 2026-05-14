@@ -790,30 +790,29 @@ code {
     0 0 8px rgba(250, 204, 21, 0.45),
     0 0 16px rgba(250, 204, 21, 0.25);
   z-index: 1;
+  position: relative;  /* anchor utk dot orbit */
 }
+/* Orbit DOT — titik kecil kuning neon yg mengitari perimeter slot.
+   Pakai offset-path: inset(0 round Npx) supaya dot mengikuti outline
+   element (rounded rectangle). Hanya untuk SLOT (resi & buffer), TIDAK
+   untuk wadah besar. */
 .has-match::before {
   content: '';
   position: absolute;
-  top: -3px; left: -3px; right: -3px; bottom: -3px;
-  border-radius: calc(var(--radius-md) + 2px);
+  inset: 0;
   pointer-events: none;
-  /* conic gradient border = "orbiting" neon glow */
-  background: conic-gradient(
-    from 0deg,
-    transparent 0deg,
-    var(--neon-yellow-glow) 60deg,
-    var(--neon-yellow) 120deg,
-    transparent 240deg,
-    transparent 360deg
-  );
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-          mask-composite: exclude;
-  padding: 2px;
-  animation: neonOrbit 1.8s linear infinite;
-  filter: drop-shadow(0 0 4px var(--neon-yellow));
+  width: 9px;
+  height: 9px;
+  background: var(--neon-yellow);
+  border-radius: 50%;
+  box-shadow:
+    0 0 6px var(--neon-yellow),
+    0 0 12px var(--neon-yellow-glow),
+    0 0 20px rgba(250, 204, 21, 0.8);
+  offset-path: inset(-4px round calc(var(--radius-md) + 2px));
+  offset-anchor: center;
+  animation: orbitDot 2s linear infinite;
+  z-index: 3;
 }
 .has-match::after {
   content: '';
@@ -874,9 +873,9 @@ code {
   animation: matchBadgeBlink 1s steps(2, start) infinite;
 }
 
-@keyframes neonOrbit {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(360deg); }
+@keyframes orbitDot {
+  from { offset-distance: 0%; }
+  to   { offset-distance: 100%; }
 }
 @keyframes neonPulse {
   0%, 100% { opacity: 0.85; }
