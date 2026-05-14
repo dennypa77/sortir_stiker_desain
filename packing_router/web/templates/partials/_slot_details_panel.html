@@ -23,66 +23,71 @@
         {% if slot.missing %}
         <div class="kurang-section">
             <h4 class="kurang-section-title kurang-section-title-missing">⚠ Kurang ({{ slot.missing|length }})</h4>
-            <ul class="kurang-list">
+            <div class="kurang-grid">
                 {% for m in slot.missing %}
-                <li class="kurang-item kurang-item-missing">
+                <div class="kurang-item kurang-item-missing">
                     <div class="kurang-item-head">
                         <code class="kurang-item-sku">{{ m.sku }}</code>
                         <small class="kurang-item-varian">{{ m.varian }}pcs</small>
                     </div>
                     <div class="kurang-item-status">
                         {% if m.untouched %}
-                            <span class="kurang-item-status-bad">BELUM DI-SCAN</span>
-                            <span class="kurang-item-qty">({{ m.ordered_pcs }}pcs)</span>
+                            <span class="kurang-item-status-bad">BELUM SCAN</span>
                         {% else %}
-                            <span>✓ {{ m.fulfilled_pcs }}/{{ m.ordered_pcs }}pcs</span>
-                            <span class="kurang-item-qty">({{ m.fulfilled }}/{{ m.ordered }} pack)</span>
+                            <span>{{ m.fulfilled_pcs }}/{{ m.ordered_pcs }}pcs</span>
                         {% endif %}
-                        {% if m.in_buffer %}<span class="match-tag match-tag-buffer">📦 buffer</span>{% endif %}
                     </div>
+                    {% if m.in_buffer and m.buffer_locations %}
+                        {% for loc in m.buffer_locations[:2] %}
+                        <div class="kurang-buffer-loc" title="Ambil dari sini">
+                            <span class="kurang-buffer-loc-icon">📦</span>
+                            <span class="kurang-buffer-loc-text">W{{ loc.wadah_nomor }}·S{{ loc.slot_number }}</span>
+                            <span class="kurang-buffer-loc-qty">{{ loc.plastik_count }}p</span>
+                        </div>
+                        {% endfor %}
+                        {% if m.buffer_locations|length > 2 %}
+                        <div class="kurang-buffer-more">+{{ m.buffer_locations|length - 2 }} lokasi lain</div>
+                        {% endif %}
+                    {% endif %}
                     {% if m.item_id %}
                     <form hx-post="{{ url_for('mark_prefilled_action', resi_id=slot.resi_id, item_id=m.item_id) }}"
                           hx-target="#dashboard-grids" hx-swap="innerHTML"
                           class="kurang-item-form">
                         <button type="submit"
                                 title="Tandai SKU ini sudah dari stok gudang"
-                                class="btn-gudang-compact">
-                            📦 Sudah dari Gudang
-                        </button>
+                                class="btn-gudang-compact">📦 Gudang</button>
                     </form>
                     {% endif %}
-                </li>
+                </div>
                 {% endfor %}
-            </ul>
+            </div>
         </div>
         {% endif %}
 
         {% if slot.prefilled %}
         <div class="kurang-section">
             <h4 class="kurang-section-title kurang-section-title-ok">✓ Stok Gudang ({{ slot.prefilled|length }})</h4>
-            <ul class="kurang-list">
+            <div class="kurang-grid">
                 {% for p in slot.prefilled %}
-                <li class="kurang-item kurang-item-prefilled">
+                <div class="kurang-item kurang-item-prefilled">
                     <div class="kurang-item-head">
                         <code class="kurang-item-sku">{{ p.sku }}</code>
                         <small class="kurang-item-varian">{{ p.varian }}pcs</small>
                     </div>
                     <div class="kurang-item-status kurang-item-status-ok">
-                        ✓ {{ p.ordered_pcs }}pcs dari stok
+                        ✓ {{ p.ordered_pcs }}pcs
                     </div>
                     {% if p.item_id %}
                     <form hx-post="{{ url_for('mark_prefilled_action', resi_id=slot.resi_id, item_id=p.item_id) }}"
                           hx-target="#dashboard-grids" hx-swap="innerHTML"
                           hx-confirm="Lepas tanda 'dari Gudang' untuk SKU {{ p.sku }}?"
                           class="kurang-item-form">
-                        <button type="submit" title="Lepas tanda gudang" class="btn-gudang-compact btn-gudang-undo">
-                            ↺ Lepas Tanda
-                        </button>
+                        <button type="submit" title="Lepas tanda gudang" class="btn-gudang-compact btn-gudang-undo">↺ Undo</button>
                     </form>
                     {% endif %}
-                </li>
+                </div>
                 {% endfor %}
-            </ul>
+            </div>
         </div>
         {% endif %}
 

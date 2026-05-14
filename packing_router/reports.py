@@ -219,6 +219,24 @@ def get_slot_aktif_match_status() -> List[dict]:
         ).fetchall()
     }
 
+    # Lokasi buffer per-SKU: {sku: [{wadah_nomor, slot_number, plastik_count}, ...]}
+    # — supaya UI bisa kasih tahu operator "ambil dari Wadah X Slot Y".
+    buffer_locations: dict[str, list[dict]] = {}
+    for row in conn.execute(
+        """
+        SELECT bs.sku, w.nomor AS wadah_nomor, bs.slot_number, bs.plastik_count
+        FROM buffer_slot bs
+        JOIN wadah w ON bs.wadah_id = w.id
+        WHERE bs.sku IS NOT NULL AND bs.plastik_count > 0
+        ORDER BY w.nomor ASC, bs.slot_number ASC
+        """
+    ).fetchall():
+        buffer_locations.setdefault(row["sku"], []).append({
+            "wadah_nomor": row["wadah_nomor"],
+            "slot_number": row["slot_number"],
+            "plastik_count": row["plastik_count"],
+        })
+
     now = _dt.datetime.now()
     out = []
     for n in slot_nums:
@@ -267,6 +285,7 @@ def get_slot_aktif_match_status() -> List[dict]:
                     - (m["quantity_fulfilled"] or 0)
                 ) * 10,
                 "in_buffer": m["sku"] in buffer_skus,
+                "buffer_locations": buffer_locations.get(m["sku"], []),
                 "untouched": (m["quantity_fulfilled"] or 0) == 0,
             }
             for m in missing

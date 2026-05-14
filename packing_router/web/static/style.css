@@ -932,19 +932,25 @@ code {
 }
 .kurang-section-title-missing { color: var(--danger); }
 .kurang-section-title-ok { color: var(--success); }
-.kurang-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
+/* Grid 3-kolom — operator bisa lihat 3 SKU sekaligus per baris. */
+.kurang-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-1);
+}
+@media (max-width: 720px) {
+  .kurang-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 .kurang-item {
-  padding: var(--space-2) var(--space-2) calc(var(--space-1) + 2px);
+  padding: var(--space-1) var(--space-1) calc(var(--space-1) + 1px);
   border-radius: var(--radius-sm);
-  margin-bottom: var(--space-1);
   border: 1px solid;
-  line-height: 1.25;
+  line-height: 1.2;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
-.kurang-item:last-child { margin-bottom: 0; }
 .kurang-item-missing {
   background: var(--danger-soft);
   border-color: var(--danger);
@@ -961,51 +967,69 @@ code {
 }
 .kurang-item-sku {
   font-weight: 700;
-  font-size: var(--fs-sm);
+  font-size: 0.75rem;
   font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .kurang-item-varian {
-  font-size: 0.65rem;
+  font-size: 0.6rem;
   color: var(--text-muted);
   font-weight: 600;
+  flex-shrink: 0;
 }
 .kurang-item-status {
-  font-size: 0.7rem;
+  font-size: 0.62rem;
   color: var(--text-muted);
-  margin-top: 2px;
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  flex-wrap: wrap;
+  line-height: 1.15;
 }
 .kurang-item-status-bad {
   color: var(--danger);
   font-weight: 700;
 }
 .kurang-item-status-ok { color: var(--success); }
-.kurang-item-qty {
-  color: var(--text-faint);
-  font-size: 0.65rem;
+/* Buffer location chip — info "ambil dari Wadah X Slot Y" */
+.kurang-buffer-loc {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.62rem;
+  background: var(--neon-yellow);
+  color: #422006;
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+  font-family: var(--font-mono);
+  line-height: 1.2;
+  white-space: nowrap;
 }
-.match-tag-buffer {
-  padding: 1px 6px;
-  font-size: 0.6rem;
-  margin: 0;
+.kurang-buffer-loc-icon { font-size: 0.7rem; }
+.kurang-buffer-loc-text { flex: 1; min-width: 0; }
+.kurang-buffer-loc-qty {
+  opacity: 0.7;
+  font-size: 0.55rem;
+}
+.kurang-buffer-more {
+  font-size: 0.55rem;
+  color: var(--text-faint);
+  font-style: italic;
+  padding-left: 2px;
 }
 .kurang-item-form {
-  margin-top: var(--space-1);
+  margin-top: 1px;
 }
 .btn-gudang-compact {
   width: 100%;
-  padding: 3px 6px;
-  font-size: 0.7rem;
-  font-weight: 600;
+  padding: 2px 4px;
+  font-size: 0.62rem;
+  font-weight: 700;
   background: var(--warning-soft);
   color: var(--warning-soft-text);
   border: 1px solid var(--warning);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  line-height: 1.2;
+  line-height: 1.15;
 }
 .btn-gudang-compact:hover {
   filter: brightness(1.05);
