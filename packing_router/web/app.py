@@ -686,7 +686,7 @@ def _get_recent_scans(operator_id: str, limit: int = 5):
                 w = payload.get("wadah_nomor", "?")
                 s = payload.get("slot_number", "?")
                 cnt = payload.get("plastik_count_after", "?")
-                summary = f"Scan {barcode}{bundle_tag} → buffer W{w}S{s} ({cnt} pack)"
+                summary = f"Scan {barcode}{bundle_tag} → buffer W{w}S{s} ({cnt} bundle)"
             elif action == "place_in_buffer_new":
                 w = payload.get("wadah_nomor", "?")
                 s = payload.get("slot_number", "?")

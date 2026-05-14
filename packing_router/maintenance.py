@@ -170,31 +170,39 @@ def undo_last_scan(operator_id: str, within_seconds: Optional[int] = None) -> Un
                 (plastik_id,),
             )
             detail = (
-                f"Decrement resi_item id={item_id} by {pack_units} pack, "
+                f"Decrement resi_item id={item_id} by {pack_units} bundle, "
                 f"plastik id={plastik_id} cleared"
             )
 
         elif action == "place_in_buffer_existing":
             slot_id = payload.get("target_buffer_slot_id")
+            buf_pack_units = int(payload.get("pack_units") or 1)
             if slot_id is not None:
-                decrement_buffer_slot(slot_id, conn=c)
+                decrement_buffer_slot(slot_id, conn=c, bundle_count=buf_pack_units)
             c.execute(
                 "UPDATE plastik SET location_type = NULL, location_ref = NULL, "
                 "placed_at = NULL WHERE id = ?",
                 (plastik_id,),
             )
-            detail = f"Decrement buffer_slot id={slot_id}, plastik id={plastik_id} cleared"
+            detail = (
+                f"Decrement buffer_slot id={slot_id} by {buf_pack_units} bundle, "
+                f"plastik id={plastik_id} cleared"
+            )
 
         elif action == "place_in_buffer_new":
             slot_id = payload.get("target_buffer_slot_id")
+            buf_pack_units = int(payload.get("pack_units") or 1)
             if slot_id is not None:
-                decrement_buffer_slot(slot_id, conn=c)
+                decrement_buffer_slot(slot_id, conn=c, bundle_count=buf_pack_units)
             c.execute(
                 "UPDATE plastik SET location_type = NULL, location_ref = NULL, "
                 "placed_at = NULL WHERE id = ?",
                 (plastik_id,),
             )
-            detail = f"Reset buffer_slot id={slot_id}, plastik id={plastik_id} cleared"
+            detail = (
+                f"Reset buffer_slot id={slot_id} (-{buf_pack_units} bundle), "
+                f"plastik id={plastik_id} cleared"
+            )
 
         else:
             raise UndoWindowExpiredError(f"Action '{action}' tidak bisa di-undo")

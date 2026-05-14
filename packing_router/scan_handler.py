@@ -154,13 +154,15 @@ def _scan_inner(
             (resi_match["resi_id"], now_iso(), plastik_id),
         )
         completed = _maybe_complete_resi(c, resi_match["resi_id"])
-        target_label = (
-            f"LETAKKAN KE SLOT {resi_match['slot_aktif_number']} "
-            f"(RESI {resi_match['nomor_resi']})"
-        )
+        target_main = f"SLOT {resi_match['slot_aktif_number']}"
+        target_suffix = f"(RESI {resi_match['nomor_resi']})"
+        target_label = f"LETAKKAN KE {target_main} {target_suffix}"
         result = ScanResult(
             action="place_in_slot_aktif",
             target_label=target_label,
+            target_prefix="LETAKKAN KE",
+            target_main=target_main,
+            target_suffix=target_suffix,
             barcode=barcode,
             sku=sku,
             varian=varian,
@@ -193,27 +195,35 @@ def _scan_inner(
     if existing is not None:
         if existing.plastik_count >= config.OVERFLOW_TRIGGER_COUNT:
             target = handle_buffer_overflow(sku, conn=c)
-            target = increment_buffer_slot(target.buffer_slot_id, conn=c)
+            target = increment_buffer_slot(
+                target.buffer_slot_id, conn=c, bundle_count=pack_units
+            )
             action = "place_in_buffer_new"
             extra = {"overflow_of": existing.buffer_slot_id}
-            target_label = (
-                f"LETAKKAN KE {target.label()} "
+            target_main = target.label()
+            target_suffix = (
                 f"(overflow dari WADAH {existing.wadah_nomor} SLOT {existing.slot_number})"
             )
+            target_label = f"LETAKKAN KE {target_main} {target_suffix}"
         else:
-            target = increment_buffer_slot(existing.buffer_slot_id, conn=c)
+            target = increment_buffer_slot(
+                existing.buffer_slot_id, conn=c, bundle_count=pack_units
+            )
             action = "place_in_buffer_existing"
             extra = {}
-            target_label = (
-                f"LETAKKAN KE {target.label()} "
-                f"(sudah berisi {target.plastik_count - 1} plastik)"
-            )
+            target_main = target.label()
+            target_suffix = f"(sudah berisi {target.plastik_count - pack_units} bundle)"
+            target_label = f"LETAKKAN KE {target_main} {target_suffix}"
     else:
         target = assign_buffer_slot(sku, conn=c)
-        target = increment_buffer_slot(target.buffer_slot_id, conn=c)
+        target = increment_buffer_slot(
+            target.buffer_slot_id, conn=c, bundle_count=pack_units
+        )
         action = "place_in_buffer_new"
         extra = {}
-        target_label = f"LETAKKAN KE {target.label()} (slot baru)"
+        target_main = target.label()
+        target_suffix = "(slot baru)"
+        target_label = f"LETAKKAN KE {target_main} {target_suffix}"
 
     c.execute(
         "UPDATE plastik SET location_type = 'buffer', location_ref = ?, "
@@ -225,6 +235,9 @@ def _scan_inner(
     result = ScanResult(
         action=action,
         target_label=target_label,
+        target_prefix="LETAKKAN KE",
+        target_main=target_main,
+        target_suffix=target_suffix,
         barcode=barcode,
         sku=sku,
         varian=varian,

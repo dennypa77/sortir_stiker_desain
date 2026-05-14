@@ -31,7 +31,7 @@ class Wadah:
 @dataclass
 class ScanResult:
     action: str  # 'place_in_slot_aktif' | 'place_in_buffer_existing' | 'place_in_buffer_new'
-    target_label: str
+    target_label: str  # legacy full string — kept for backwards compat / logs
     barcode: str
     sku: str
     varian: int
@@ -41,6 +41,13 @@ class ScanResult:
     target_buffer_slot_id: Optional[int] = None
     existing_plastik_count: Optional[int] = None
     extra: dict = field(default_factory=dict)
+    # Structured target untuk visual hierarchy di scan_result UI:
+    #   prefix = "LETAKKAN KE" (kecil)
+    #   main   = "WADAH 1 SLOT 8" / "SLOT 2" (BIG, attention-grabbing)
+    #   suffix = "(slot baru)" / "(sudah berisi 7 bundle)" / "(RESI XXX)" (kecil)
+    target_prefix: Optional[str] = None
+    target_main: Optional[str] = None
+    target_suffix: Optional[str] = None
 
 
 @dataclass

@@ -111,31 +111,46 @@ def handle_buffer_overflow(sku: str, conn: Optional[sqlite3.Connection] = None) 
     return _select_buffer_slot_by_id(c, empty_row["id"])  # type: ignore[return-value]
 
 
-def increment_buffer_slot(slot_id: int, conn: Optional[sqlite3.Connection] = None) -> BufferLocation:
-    """Increment ``plastik_count`` di slot. Caller harus dalam transaction.
+def increment_buffer_slot(
+    slot_id: int,
+    conn: Optional[sqlite3.Connection] = None,
+    bundle_count: int = 1,
+) -> BufferLocation:
+    """Increment ``plastik_count`` di slot, berdasarkan jumlah BUNDLE.
+
+    Caller harus dalam transaction. 1 plastik kecil = 1 bundle = 10pcs;
+    1 plastik bundle besar = 5 bundle = 50pcs. ``bundle_count`` lewatkan
+    sesuai pack_units dari scan_handler (1 atau 5).
 
     Set ``first_plastik_at`` jika belum ada, update ``last_plastik_at`` selalu.
     """
+    if bundle_count < 1:
+        bundle_count = 1
     c = conn or get_connection()
     ts = now_iso()
     c.execute(
         "UPDATE buffer_slot "
-        "SET plastik_count = plastik_count + 1, "
+        "SET plastik_count = plastik_count + ?, "
         "    first_plastik_at = COALESCE(first_plastik_at, ?), "
         "    last_plastik_at = ? "
         "WHERE id = ?",
-        (ts, ts, slot_id),
+        (bundle_count, ts, ts, slot_id),
     )
     return _select_buffer_slot_by_id(c, slot_id)  # type: ignore[return-value]
 
 
-def decrement_buffer_slot(slot_id: int, conn: Optional[sqlite3.Connection] = None) -> BufferLocation:
-    """Decrement ``plastik_count``. Saat 0 → reset slot (sku=NULL, timestamps=NULL,
-    is_overflow_of=NULL) supaya slot bisa di-reuse."""
+def decrement_buffer_slot(
+    slot_id: int,
+    conn: Optional[sqlite3.Connection] = None,
+    bundle_count: int = 1,
+) -> BufferLocation:
+    """Decrement ``plastik_count`` sebanyak ``bundle_count``. Saat 0 → reset slot."""
+    if bundle_count < 1:
+        bundle_count = 1
     c = conn or get_connection()
     c.execute(
-        "UPDATE buffer_slot SET plastik_count = MAX(0, plastik_count - 1) WHERE id = ?",
-        (slot_id,),
+        "UPDATE buffer_slot SET plastik_count = MAX(0, plastik_count - ?) WHERE id = ?",
+        (bundle_count, slot_id),
     )
     row = c.execute(
         "SELECT plastik_count FROM buffer_slot WHERE id = ?", (slot_id,)

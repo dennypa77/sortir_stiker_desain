@@ -492,7 +492,7 @@ input:focus {
 
 /* === Scan instruction (the big result card) === */
 .scan-instruction {
-  padding: var(--space-5);
+  padding: var(--space-4);
   border-radius: var(--radius-lg);
   margin-bottom: var(--space-3);
   text-align: center;
@@ -509,10 +509,41 @@ input:focus {
 .scan-place_in_buffer_existing { background: var(--warning-soft); border-color: var(--warning); }
 .scan-place_in_buffer_new { background: var(--accent-soft); border-color: var(--accent); }
 .scan-label {
-  font-size: var(--fs-2xl);
+  font-size: var(--fs-xl);
   font-weight: 800;
   letter-spacing: -0.02em;
   color: var(--text);
+}
+/* Structured target dengan visual hierarchy:
+   - prefix "LETAKKAN KE" (kecil, uppercase muted)
+   - MAIN "WADAH 1 SLOT 8" (BESAR, attention-grabbing)
+   - suffix "(sudah berisi 7 bundle)" (kecil, italic muted) */
+.scan-target {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  line-height: 1.1;
+}
+.scan-target-prefix {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.scan-target-main {
+  font-size: var(--fs-2xl);
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  line-height: 1;
+}
+.scan-target-suffix {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-muted);
+  font-style: italic;
 }
 .scan-meta {
   font-size: var(--fs-base);

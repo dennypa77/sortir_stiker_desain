@@ -75,11 +75,11 @@
             {% for s in w.slots %}
             <div class="cell cell-buffer {% if s.sku %}cell-buffer-filled{% else %}cell-buffer-empty{% endif %} {% if s.has_match %}has-match{% endif %} {% if s.is_overflow %}cell-overflow{% endif %}"
                  data-skus="{% if s.has_match %}{{ s.sku }}{% endif %}"
-                 title="Wadah {{ w.nomor }} Slot {{ s.slot_number }}{% if s.sku %} — SKU {{ s.sku }} ({{ s.plastik_count }} pcs){% endif %}">
+                 title="Wadah {{ w.nomor }} Slot {{ s.slot_number }}{% if s.sku %} — SKU {{ s.sku }} ({{ s.plastik_count }} bundle = {{ s.plastik_count * 10 }} pcs){% endif %}">
                 <div class="cell-no">{{ s.slot_number }}</div>
                 {% if s.sku %}
                     <div class="cell-sku"><code>{{ s.sku }}</code></div>
-                    <div class="cell-count">{{ s.plastik_count }}<small>pcs</small></div>
+                    <div class="cell-count">{{ s.plastik_count }}<small>bundle</small></div>
                     {% if s.has_match %}
                     <div class="cell-match-info">
                         →

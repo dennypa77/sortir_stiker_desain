@@ -4,17 +4,26 @@
     <div class="alert alert-info">ℹ {{ info }}</div>
 {% elif result %}
     <div class="scan-instruction scan-{{ result.action }}">
+        {% if result.target_main %}
+        <div class="scan-target">
+            <span class="scan-target-prefix">{{ result.target_prefix or 'LETAKKAN KE' }}</span>
+            <span class="scan-target-main">{{ result.target_main }}</span>
+            {% if result.target_suffix %}<span class="scan-target-suffix">{{ result.target_suffix }}</span>{% endif %}
+        </div>
+        {% else %}
+        {# Fallback legacy single-string target_label #}
         <div class="scan-label">{{ result.target_label }}</div>
+        {% endif %}
         {% set _pu = result.extra.pack_units if result.extra and result.extra.pack_units else 1 %}
         {% if _pu >= 5 %}
-        <div class="scan-bundle-badge">📦 BUNDLE 50pcs (= {{ _pu }} pack)</div>
+        <div class="scan-bundle-badge">📦 BUNDLE 50pcs (= {{ _pu }} bundle)</div>
         {% endif %}
         <div class="scan-meta">
             SKU: <code>{{ result.sku }}</code>
             {% if result.varian %}<span class="text-subtle">· {{ result.varian }} pcs</span>{% endif %}
         </div>
         {% if result.action == 'place_in_buffer_existing' and result.existing_plastik_count %}
-        <div class="scan-meta">Slot sekarang berisi: <strong>{{ result.existing_plastik_count }}</strong> pack</div>
+        <div class="scan-meta">Slot sekarang berisi: <strong>{{ result.existing_plastik_count }}</strong> bundle</div>
         {% endif %}
         {% if result.extra and result.extra.resi_completed %}
         <div class="scan-complete">✔ RESI LENGKAP — siap di-pack</div>
