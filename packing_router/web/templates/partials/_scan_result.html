@@ -5,6 +5,10 @@
 {% elif result %}
     <div class="scan-instruction scan-{{ result.action }}">
         <div class="scan-label">{{ result.target_label }}</div>
+        {% set _pu = result.extra.pack_units if result.extra and result.extra.pack_units else 1 %}
+        {% if _pu >= 5 %}
+        <div class="scan-bundle-badge">📦 BUNDLE 50pcs (= {{ _pu }} pack)</div>
+        {% endif %}
         <div class="scan-meta">
             SKU: <code>{{ result.sku }}</code>
             {% if result.varian %}<span class="text-subtle">· {{ result.varian }} pcs</span>{% endif %}

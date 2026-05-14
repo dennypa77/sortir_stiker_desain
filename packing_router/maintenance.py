@@ -152,11 +152,12 @@ def undo_last_scan(operator_id: str, within_seconds: Optional[int] = None) -> Un
         if action == "place_in_slot_aktif":
             item_id = payload.get("target_resi_item_id")
             resi_id = payload.get("target_resi_id")
+            pack_units = int(payload.get("pack_units") or 1)
             if item_id is not None:
                 c.execute(
-                    "UPDATE resi_item SET quantity_fulfilled = MAX(0, quantity_fulfilled - 1) "
+                    "UPDATE resi_item SET quantity_fulfilled = MAX(0, quantity_fulfilled - ?) "
                     "WHERE id = ?",
-                    (item_id,),
+                    (pack_units, item_id),
                 )
             if resi_id is not None and payload.get("resi_completed"):
                 c.execute(
@@ -168,7 +169,10 @@ def undo_last_scan(operator_id: str, within_seconds: Optional[int] = None) -> Un
                 "placed_at = NULL WHERE id = ?",
                 (plastik_id,),
             )
-            detail = f"Decrement resi_item id={item_id}, plastik id={plastik_id} cleared"
+            detail = (
+                f"Decrement resi_item id={item_id} by {pack_units} pack, "
+                f"plastik id={plastik_id} cleared"
+            )
 
         elif action == "place_in_buffer_existing":
             slot_id = payload.get("target_buffer_slot_id")

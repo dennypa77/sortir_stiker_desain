@@ -41,16 +41,29 @@
     <p class="text-muted">Scan barcode di plastik (numeric ID, mis.
     <code>445</code>). Sistem arahkan ke slot aktif yang butuh, atau ke
     buffer kalau belum ada resi yang butuh.</p>
+
+    <div id="pack-size-toggle" class="pack-size-toggle" data-value="10">
+        <span class="pack-size-toggle__label">Isi per plastik:</span>
+        <div class="pack-size-toggle__group" role="radiogroup" aria-label="Pilih isi per plastik">
+            <button type="button" class="pack-size-toggle__btn is-active"
+                    data-pack="10" role="radio" aria-checked="true">10pcs</button>
+            <button type="button" class="pack-size-toggle__btn"
+                    data-pack="50" role="radio" aria-checked="false">50pcs</button>
+        </div>
+        <span class="pack-size-toggle__hint">Switch saat ganti tumpukan plastik bundle</span>
+    </div>
+
     <form hx-post="{{ url_for('operator_scan_submit') }}"
           hx-target="#scan-result"
           hx-swap="innerHTML"
           hx-on::after-request="document.getElementById('barcode').value=''; document.getElementById('barcode').focus();">
         <input type="hidden" name="operator_id" value="{{ operator_id }}">
+        <input type="hidden" name="pack_size" id="pack-size-input" value="10">
         <div style="display:flex; gap: var(--space-2);">
             <input type="text" id="barcode" name="barcode" autofocus
                    autocomplete="off" placeholder="Scan barcode plastik (e.g. 445)"
                    class="big-input" style="flex:1;">
-            <button type="submit" class="btn-primary">Scan</button>
+            <button type="submit" class="btn-primary" id="scan-submit-btn">Scan</button>
         </div>
     </form>
     <form hx-post="{{ url_for('operator_undo') }}"
@@ -65,4 +78,46 @@
 <section id="scan-result" class="panel">
     {% include 'partials/_scan_result.html' %}
 </section>
+
+<script>
+(function () {
+    const STORAGE_KEY = 'packing_router.pack_size';
+    const wrap = document.getElementById('pack-size-toggle');
+    const input = document.getElementById('pack-size-input');
+    const submitBtn = document.getElementById('scan-submit-btn');
+    if (!wrap || !input) return;
+
+    const buttons = wrap.querySelectorAll('.pack-size-toggle__btn');
+
+    function apply(value) {
+        const v = value === '50' ? '50' : '10';
+        input.value = v;
+        wrap.dataset.value = v;
+        buttons.forEach(function (btn) {
+            const active = btn.dataset.pack === v;
+            btn.classList.toggle('is-active', active);
+            btn.setAttribute('aria-checked', active ? 'true' : 'false');
+        });
+        if (submitBtn) {
+            submitBtn.classList.toggle('btn-primary--bundle', v === '50');
+            submitBtn.textContent = v === '50' ? 'Scan (50pcs)' : 'Scan';
+        }
+    }
+
+    try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) apply(saved);
+    } catch (e) { /* ignore storage errors */ }
+
+    buttons.forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            const v = btn.dataset.pack;
+            apply(v);
+            try { localStorage.setItem(STORAGE_KEY, v); } catch (e) {}
+            const barcode = document.getElementById('barcode');
+            if (barcode) barcode.focus();
+        });
+    });
+})();
+</script>
 {% endblock %}

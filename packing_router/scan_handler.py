@@ -24,7 +24,9 @@ from .models import ScanResult
 from .utils import parse_barcode
 
 
-def _ensure_plastik(conn: sqlite3.Connection, barcode: str) -> sqlite3.Row:
+def _ensure_plastik(
+    conn: sqlite3.Connection, barcode: str, pack_units: int = 1
+) -> sqlite3.Row:
     """Selalu create plastik row baru per scan.
 
     HOG pakai barcode = numeric ID design (mis. ``445``) — banyak plastik fisik
@@ -33,14 +35,18 @@ def _ensure_plastik(conn: sqlite3.Connection, barcode: str) -> sqlite3.Row:
 
     Untuk dedup accidental double-scan operator, pakai tombol Undo dalam window
     30 detik.
+
+    ``pack_units`` = jumlah pack 10pcs di plastik fisik ini. Default 1 (= 10pcs).
+    Untuk plastik bundle 50pcs, operator pilih toggle 50 → pack_units=5.
     """
     numeric_id = parse_barcode(barcode)
     cur = conn.execute(
-        "INSERT INTO plastik (barcode, sku, varian, scanned_at) VALUES (?, ?, NULL, ?)",
-        (barcode, numeric_id, now_iso()),
+        "INSERT INTO plastik (barcode, sku, varian, scanned_at, pack_units) "
+        "VALUES (?, ?, NULL, ?, ?)",
+        (barcode, numeric_id, now_iso(), pack_units),
     )
     return conn.execute(
-        "SELECT id, barcode, sku, varian, location_type, location_ref "
+        "SELECT id, barcode, sku, varian, location_type, location_ref, pack_units "
         "FROM plastik WHERE id = ?",
         (cur.lastrowid,),
     ).fetchone()
@@ -102,28 +108,36 @@ def handle_scan_plastik(
     barcode: str,
     operator_id: str,
     conn: Optional[sqlite3.Connection] = None,
+    pack_units: int = 1,
 ) -> ScanResult:
     """Event 1 entry point.
 
     Note: caller bisa pass ``conn`` untuk reuse transaction (mis. dipanggil dari
     ``cancel_resi`` saat re-route plastik balik ke buffer).
+
+    ``pack_units`` = jumlah pack 10pcs dalam 1 plastik fisik. Default 1 (10pcs).
+    Operator switch ke 5 untuk plastik bundle 50pcs.
     """
     use_outer_conn = conn is not None
     c = conn or get_connection()
     barcode = barcode.strip()
     if not barcode:
         raise BarcodeFormatError("Barcode kosong")
+    if pack_units < 1:
+        pack_units = 1
 
     if use_outer_conn:
-        result = _scan_inner(c, barcode, operator_id)
+        result = _scan_inner(c, barcode, operator_id, pack_units)
     else:
         with transaction(c) as tc:
-            result = _scan_inner(tc, barcode, operator_id)
+            result = _scan_inner(tc, barcode, operator_id, pack_units)
     return result
 
 
-def _scan_inner(c: sqlite3.Connection, barcode: str, operator_id: str) -> ScanResult:
-    plastik = _ensure_plastik(c, barcode)
+def _scan_inner(
+    c: sqlite3.Connection, barcode: str, operator_id: str, pack_units: int = 1
+) -> ScanResult:
+    plastik = _ensure_plastik(c, barcode, pack_units=pack_units)
     sku = plastik["sku"]  # numeric_id
     varian = plastik["varian"]  # bisa NULL untuk plastik HOG (varian agnostic)
     plastik_id = plastik["id"]
@@ -131,8 +145,8 @@ def _scan_inner(c: sqlite3.Connection, barcode: str, operator_id: str) -> ScanRe
     resi_match = _find_active_resi_needing_sku(c, sku)
     if resi_match is not None:
         c.execute(
-            "UPDATE resi_item SET quantity_fulfilled = quantity_fulfilled + 1 WHERE id = ?",
-            (resi_match["item_id"],),
+            "UPDATE resi_item SET quantity_fulfilled = quantity_fulfilled + ? WHERE id = ?",
+            (pack_units, resi_match["item_id"]),
         )
         c.execute(
             "UPDATE plastik SET location_type = 'slot_aktif', location_ref = ?, "
@@ -153,7 +167,7 @@ def _scan_inner(c: sqlite3.Connection, barcode: str, operator_id: str) -> ScanRe
             target_slot_aktif_number=resi_match["slot_aktif_number"],
             target_resi_id=resi_match["resi_id"],
             target_resi_nomor=resi_match["nomor_resi"],
-            extra={"resi_completed": completed},
+            extra={"resi_completed": completed, "pack_units": pack_units},
         )
         log_event(
             "scan",
@@ -169,6 +183,7 @@ def _scan_inner(c: sqlite3.Connection, barcode: str, operator_id: str) -> ScanRe
                 "target_resi_item_id": resi_match["item_id"],
                 "target_slot_aktif_number": resi_match["slot_aktif_number"],
                 "resi_completed": completed,
+                "pack_units": pack_units,
             },
             conn=c,
         )
@@ -206,6 +221,7 @@ def _scan_inner(c: sqlite3.Connection, barcode: str, operator_id: str) -> ScanRe
         (target.buffer_slot_id, now_iso(), plastik_id),
     )
 
+    extra_with_pack = {**extra, "pack_units": pack_units}
     result = ScanResult(
         action=action,
         target_label=target_label,
@@ -214,7 +230,7 @@ def _scan_inner(c: sqlite3.Connection, barcode: str, operator_id: str) -> ScanRe
         varian=varian,
         target_buffer_slot_id=target.buffer_slot_id,
         existing_plastik_count=target.plastik_count,
-        extra=extra,
+        extra=extra_with_pack,
     )
     log_event(
         "scan",
@@ -230,7 +246,7 @@ def _scan_inner(c: sqlite3.Connection, barcode: str, operator_id: str) -> ScanRe
             "wadah_nomor": target.wadah_nomor,
             "slot_number": target.slot_number,
             "plastik_count_after": target.plastik_count,
-            **extra,
+            **extra_with_pack,
         },
         conn=c,
     )

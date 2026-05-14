@@ -117,6 +117,8 @@ def create_app() -> Flask:
     def operator_scan_submit():
         operator_id = (request.form.get("operator_id") or "").strip() or _default_operator_id()
         barcode = (request.form.get("barcode") or "").strip()
+        pack_size_raw = (request.form.get("pack_size") or "10").strip()
+        pack_units = 5 if pack_size_raw == "50" else 1
         if not barcode:
             return (
                 render_template(
@@ -129,7 +131,9 @@ def create_app() -> Flask:
                 _trigger("playError"),
             )
         try:
-            result = handle_scan_plastik(barcode, operator_id=operator_id)
+            result = handle_scan_plastik(
+                barcode, operator_id=operator_id, pack_units=pack_units
+            )
         except (BarcodeFormatError, BufferFullError) as e:
             return (
                 render_template(
@@ -671,22 +675,24 @@ def _get_recent_scans(operator_id: str, limit: int = 5):
             barcode = payload.get("barcode", "?")
             sku = payload.get("sku", "?")
             action = payload.get("action", "")
+            pack_units = int(payload.get("pack_units") or 1)
+            bundle_tag = " [50pcs]" if pack_units >= 5 else ""
             if action == "place_in_slot_aktif":
                 target = payload.get("target_slot_aktif_number", "?")
-                summary = f"Scan {barcode} → SLOT {target} (SKU {sku})"
+                summary = f"Scan {barcode}{bundle_tag} → SLOT {target} (SKU {sku})"
                 if payload.get("resi_completed"):
                     summary += " ✓ resi lengkap"
             elif action == "place_in_buffer_existing":
                 w = payload.get("wadah_nomor", "?")
                 s = payload.get("slot_number", "?")
                 cnt = payload.get("plastik_count_after", "?")
-                summary = f"Scan {barcode} → buffer W{w}S{s} ({cnt} pack)"
+                summary = f"Scan {barcode}{bundle_tag} → buffer W{w}S{s} ({cnt} pack)"
             elif action == "place_in_buffer_new":
                 w = payload.get("wadah_nomor", "?")
                 s = payload.get("slot_number", "?")
-                summary = f"Scan {barcode} → buffer W{w}S{s} (slot baru)"
+                summary = f"Scan {barcode}{bundle_tag} → buffer W{w}S{s} (slot baru)"
             else:
-                summary = f"Scan {barcode}"
+                summary = f"Scan {barcode}{bundle_tag}"
         elif r["event_type"] == "undo":
             act = payload.get("action", "scan")
             summary = f"Undo {act}"

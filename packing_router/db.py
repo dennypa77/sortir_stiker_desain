@@ -80,7 +80,8 @@ CREATE TABLE IF NOT EXISTS plastik (
     location_type TEXT,
     location_ref INTEGER,
     scanned_at TEXT,
-    placed_at TEXT
+    placed_at TEXT,
+    pack_units INTEGER DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS harvester_task (
@@ -162,6 +163,7 @@ def get_connection(path: Optional[str] = None) -> sqlite3.Connection:
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_DDL)
     _migrate_add_prefilled_qty(conn)
+    _migrate_add_pack_units(conn)
 
 
 def _migrate_add_prefilled_qty(conn: sqlite3.Connection) -> None:
@@ -169,6 +171,12 @@ def _migrate_add_prefilled_qty(conn: sqlite3.Connection) -> None:
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(resi_item)").fetchall()}
     if "prefilled_qty" not in cols:
         conn.execute("ALTER TABLE resi_item ADD COLUMN prefilled_qty INTEGER DEFAULT 0")
+
+
+def _migrate_add_pack_units(conn: sqlite3.Connection) -> None:
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(plastik)").fetchall()}
+    if "pack_units" not in cols:
+        conn.execute("ALTER TABLE plastik ADD COLUMN pack_units INTEGER DEFAULT 1")
 
 
 def reset_connection() -> None:
