@@ -84,6 +84,69 @@
     tick();
     setInterval(tick, 30000);
   })();
+
+  // Pack-size toggle (10/50pcs) — reusable. Setiap .pack-size-toggle harus
+  // punya data-input="ID-hidden-input" dan opsional data-button="ID-submit-btn".
+  // Tombol .pack-size-toggle__btn dgn data-pack="10"|"50". Preference persist
+  // di localStorage 'packing_router.pack_size' (shared antar instance).
+  (function () {
+    const STORAGE_KEY = 'packing_router.pack_size';
+    const toggles = document.querySelectorAll('.pack-size-toggle');
+    if (!toggles.length) return;
+
+    function applyToToggle(wrap, value) {
+      const v = value === '50' ? '50' : '10';
+      wrap.dataset.value = v;
+      const inputId = wrap.getAttribute('data-input');
+      if (inputId) {
+        const input = document.getElementById(inputId);
+        if (input) input.value = v;
+      }
+      wrap.querySelectorAll('.pack-size-toggle__btn').forEach(function (btn) {
+        const active = btn.dataset.pack === v;
+        btn.classList.toggle('is-active', active);
+        btn.setAttribute('aria-checked', active ? 'true' : 'false');
+      });
+      const btnId = wrap.getAttribute('data-button');
+      if (btnId) {
+        const submitBtn = document.getElementById(btnId);
+        if (submitBtn) {
+          submitBtn.classList.toggle('btn-primary--bundle', v === '50');
+          // Preserve original text via data attribute
+          if (!submitBtn.dataset.originalText) {
+            submitBtn.dataset.originalText = submitBtn.textContent.trim();
+          }
+          submitBtn.textContent = v === '50'
+            ? submitBtn.dataset.originalText + ' (50pcs)'
+            : submitBtn.dataset.originalText;
+        }
+      }
+    }
+
+    function applyAll(value) {
+      toggles.forEach(function (wrap) { applyToToggle(wrap, value); });
+    }
+
+    let initial = '10';
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved === '10' || saved === '50') initial = saved;
+    } catch (e) {}
+    applyAll(initial);
+
+    toggles.forEach(function (wrap) {
+      wrap.querySelectorAll('.pack-size-toggle__btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          const v = btn.dataset.pack;
+          applyAll(v);  // sync semua toggle di page
+          try { localStorage.setItem(STORAGE_KEY, v); } catch (e) {}
+          // Refocus input scan terdekat supaya operator langsung bisa scan
+          const form = wrap.closest('section, aside, div')?.querySelector('input[name=barcode]');
+          if (form) form.focus();
+        });
+      });
+    });
+  })();
 </script>
 </body>
 </html>

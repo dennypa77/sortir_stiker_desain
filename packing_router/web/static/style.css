@@ -318,8 +318,8 @@ button:focus-visible {
   padding: var(--space-2) var(--space-3);
   margin-bottom: var(--space-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface-2, var(--surface));
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
   transition: background 0.15s, border-color 0.15s;
 }
 .pack-size-toggle[data-value="50"] {
@@ -327,18 +327,18 @@ button:focus-visible {
   border-color: var(--warning);
 }
 .pack-size-toggle__label {
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 .pack-size-toggle__group {
   display: inline-flex;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   overflow: hidden;
-  background: var(--surface);
+  background: var(--bg-elevated);
 }
 .pack-size-toggle__btn {
   appearance: none;
@@ -540,7 +540,7 @@ input:focus {
   font-weight: 700;
   font-size: var(--fs-sm);
   letter-spacing: 0.04em;
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   box-shadow: 0 0 0 2px var(--warning-soft);
 }
 

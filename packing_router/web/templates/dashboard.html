@@ -66,16 +66,29 @@
 
             <div class="mode-pane mode-scan" style="display:none;" role="tabpanel">
                 <div class="mode-label">Scan barcode plastik (output weeding)</div>
+                <div class="pack-size-toggle" data-value="10"
+                     data-input="pack-size-input-dash"
+                     data-button="dash-scan-submit-btn">
+                    <span class="pack-size-toggle__label">Isi per plastik:</span>
+                    <div class="pack-size-toggle__group" role="radiogroup" aria-label="Pilih isi per plastik">
+                        <button type="button" class="pack-size-toggle__btn is-active"
+                                data-pack="10" role="radio" aria-checked="true">10pcs</button>
+                        <button type="button" class="pack-size-toggle__btn"
+                                data-pack="50" role="radio" aria-checked="false">50pcs</button>
+                    </div>
+                    <span class="pack-size-toggle__hint">50pcs = 1 plastik bundle</span>
+                </div>
                 <form hx-post="{{ url_for('operator_scan_submit') }}"
                       hx-target="#side-result"
                       hx-swap="innerHTML"
                       hx-on::after-request="this.querySelector('input[name=barcode]').value=''; this.querySelector('input[name=barcode]').focus();">
                     <input type="hidden" name="operator_id" value="{{ operator_id }}">
+                    <input type="hidden" name="pack_size" id="pack-size-input-dash" value="10">
                     <div style="display:flex; gap:var(--space-2); align-items:stretch;">
                         <input type="text" name="barcode" autocomplete="off"
                                placeholder="Scan plastik (e.g. 445)"
                                class="big-input" style="flex:1;">
-                        <button type="submit" class="btn-primary">Scan</button>
+                        <button type="submit" class="btn-primary" id="dash-scan-submit-btn">Scan</button>
                         <button type="button"
                                 hx-post="{{ url_for('operator_undo') }}"
                                 hx-include="closest form"
