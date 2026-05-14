@@ -66,7 +66,8 @@
 {% if buffer.wadahs %}
 <div class="buffer-wrap">
     {% for w in buffer.wadahs %}
-    <div class="buffer-wadah">
+    {% set wadah_has_match = w.slots|selectattr('has_match')|list|length > 0 %}
+    <div class="buffer-wadah {% if wadah_has_match %}buffer-wadah-has-match{% endif %}">
         <div class="buffer-wadah-label">Wadah {{ w.nomor }}</div>
         <div class="grid-buffer">
             {% for s in w.slots %}

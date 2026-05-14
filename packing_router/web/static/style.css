@@ -773,20 +773,59 @@ code {
   font-weight: 600;
 }
 
-/* === Match highlight & pulse animation === */
+/* === Match highlight & pulse animation ===
+   Yellow neon — dipakai saat ada matching SKU antara resi baru
+   (slot aktif) dgn buffer plastik. Visual cue ke operator:
+   "ini barangnya ada di buffer X, ambil dari sana". */
+:root {
+  --neon-yellow: #facc15;
+  --neon-yellow-glow: #fde047;
+  --neon-yellow-deep: #eab308;
+}
+
 .has-match {
-  border-color: var(--info) !important;
-  box-shadow: 0 0 0 1px var(--info) inset;
+  border-color: var(--neon-yellow) !important;
+  box-shadow:
+    0 0 0 1px var(--neon-yellow) inset,
+    0 0 8px rgba(250, 204, 21, 0.45),
+    0 0 16px rgba(250, 204, 21, 0.25);
+  z-index: 1;
+}
+.has-match::before {
+  content: '';
+  position: absolute;
+  top: -3px; left: -3px; right: -3px; bottom: -3px;
+  border-radius: calc(var(--radius-md) + 2px);
+  pointer-events: none;
+  /* conic gradient border = "orbiting" neon glow */
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    var(--neon-yellow-glow) 60deg,
+    var(--neon-yellow) 120deg,
+    transparent 240deg,
+    transparent 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  padding: 2px;
+  animation: neonOrbit 1.8s linear infinite;
+  filter: drop-shadow(0 0 4px var(--neon-yellow));
 }
 .has-match::after {
   content: '';
-  position: absolute; top: -3px; left: -3px; right: -3px; bottom: -3px;
-  border: 2px solid var(--info);
-  border-radius: calc(var(--radius-md) + 2px);
+  position: absolute;
+  inset: -1px;
+  border: 1.5px solid var(--neon-yellow);
+  border-radius: calc(var(--radius-md) + 1px);
   pointer-events: none;
-  opacity: 0.6;
-  animation: pulseRing 1.4s ease-in-out infinite;
+  opacity: 0.85;
+  animation: neonPulse 1.2s ease-in-out infinite;
 }
+
 .cell-active {
   transform: scale(1.05);
   box-shadow: 0 0 0 4px var(--warning), 0 4px 12px rgba(245, 158, 11, 0.4);
@@ -798,37 +837,115 @@ code {
   animation: pulseRingActive 0.8s ease-in-out infinite;
 }
 .cell-match {
-  box-shadow: 0 0 0 3px #ec4899, 0 4px 12px rgba(236, 72, 153, 0.35);
+  box-shadow:
+    0 0 0 3px var(--neon-yellow),
+    0 0 12px rgba(250, 204, 21, 0.55),
+    0 0 24px rgba(250, 204, 21, 0.35);
   z-index: 1;
 }
 .cell-match::after {
-  border-color: #ec4899;
+  border-color: var(--neon-yellow);
   border-width: 3px;
   animation: pulseRingActive 0.8s ease-in-out infinite;
 }
 
-@keyframes pulseRing {
-  0%, 100% { opacity: 0.4; transform: scale(1); }
-  50% { opacity: 0.9; transform: scale(1.04); }
+/* Wadah besar pulse — saat ada minimal 1 slot di dalamnya yg has-match,
+   kasih glow kuning di seluruh box wadah supaya operator gampang lihat
+   wadah mana yg perlu di-ambil. */
+.buffer-wadah-has-match {
+  border-color: var(--neon-yellow) !important;
+  animation: wadahPulse 1.6s ease-in-out infinite;
+  position: relative;
+  z-index: 1;
+}
+.buffer-wadah-has-match .buffer-wadah-label {
+  color: var(--neon-yellow-deep);
+  font-weight: 800;
+}
+.buffer-wadah-has-match .buffer-wadah-label::after {
+  content: '⚡ MATCH';
+  margin-left: var(--space-2);
+  font-size: 0.65rem;
+  padding: 1px 6px;
+  background: var(--neon-yellow);
+  color: #422006;
+  border-radius: var(--radius-full);
+  letter-spacing: 0.05em;
+  animation: matchBadgeBlink 1s steps(2, start) infinite;
+}
+
+@keyframes neonOrbit {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+@keyframes neonPulse {
+  0%, 100% { opacity: 0.85; }
+  50%      { opacity: 0.35; }
+}
+@keyframes wadahPulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 2px var(--neon-yellow),
+      0 0 12px rgba(250, 204, 21, 0.4),
+      0 0 28px rgba(250, 204, 21, 0.22);
+  }
+  50% {
+    box-shadow:
+      0 0 0 3px var(--neon-yellow-glow),
+      0 0 22px rgba(250, 204, 21, 0.65),
+      0 0 48px rgba(250, 204, 21, 0.38);
+  }
+}
+@keyframes matchBadgeBlink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
 }
 @keyframes pulseRingActive {
   0%, 100% { opacity: 0.9; transform: scale(1); }
   50% { opacity: 1; transform: scale(1.07); }
 }
 
-/* === Kurang panel (slot details sidebar) === */
-.kurang-panel h3 { font-size: var(--fs-md); }
-.kurang-panel h4 {
+/* === Kurang panel (slot details sidebar) — compact v2 === */
+.panel-header-compact {
+  padding-bottom: var(--space-2);
+  margin-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+.kurang-panel h3 {
   font-size: var(--fs-sm);
-  margin: 0 0 var(--space-2) 0;
+  margin: 0;
+  letter-spacing: 0.02em;
+}
+.kurang-resi-code {
+  font-size: 0.7rem;
+  background: var(--bg-elevated);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+.kurang-section { margin-bottom: var(--space-3); }
+.kurang-section:last-child { margin-bottom: 0; }
+.kurang-section-title {
+  font-size: 0.72rem;
+  margin: 0 0 var(--space-1) 0;
   font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.kurang-section-title-missing { color: var(--danger); }
+.kurang-section-title-ok { color: var(--success); }
+.kurang-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
 }
 .kurang-item {
-  padding: var(--space-2);
-  border-radius: var(--radius-md);
-  margin-bottom: var(--space-2);
+  padding: var(--space-2) var(--space-2) calc(var(--space-1) + 2px);
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--space-1);
   border: 1px solid;
+  line-height: 1.25;
 }
+.kurang-item:last-child { margin-bottom: 0; }
 .kurang-item-missing {
   background: var(--danger-soft);
   border-color: var(--danger);
@@ -840,7 +957,64 @@ code {
 .kurang-item-head {
   display: flex;
   justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+.kurang-item-sku {
+  font-weight: 700;
+  font-size: var(--fs-sm);
+  font-family: var(--font-mono);
+}
+.kurang-item-varian {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.kurang-item-status {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+  display: flex;
   align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+.kurang-item-status-bad {
+  color: var(--danger);
+  font-weight: 700;
+}
+.kurang-item-status-ok { color: var(--success); }
+.kurang-item-qty {
+  color: var(--text-faint);
+  font-size: 0.65rem;
+}
+.match-tag-buffer {
+  padding: 1px 6px;
+  font-size: 0.6rem;
+  margin: 0;
+}
+.kurang-item-form {
+  margin-top: var(--space-1);
+}
+.btn-gudang-compact {
+  width: 100%;
+  padding: 3px 6px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: var(--warning-soft);
+  color: var(--warning-soft-text);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  line-height: 1.2;
+}
+.btn-gudang-compact:hover {
+  filter: brightness(1.05);
+}
+.btn-gudang-undo {
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  border-color: var(--border);
 }
 
 /* === Empty states === */

@@ -6,47 +6,47 @@
    oob: True kalau di-render sebagai out-of-band swap. #}
 <section id="kurang-panel" class="panel kurang-panel"{% if oob %} hx-swap-oob="true"{% endif %}>
     {% if not slot or not slot.resi_id %}
-        <div class="panel-header">
+        <div class="panel-header panel-header-compact">
             <h3>Detail Slot</h3>
         </div>
-        <div class="empty-state" style="padding: var(--space-4) var(--space-2);">
+        <div class="empty-state" style="padding: var(--space-3) var(--space-2);">
             <div class="empty-state-icon">👆</div>
             <div class="empty-state-title">Pilih slot untuk lihat detail</div>
-            <div class="empty-state-hint">Klik kartu slot di grid kiri untuk lihat SKU kurang & yang sudah dari stok gudang</div>
+            <div class="empty-state-hint">Klik kartu slot di grid kiri</div>
         </div>
     {% else %}
-        <div class="panel-header">
+        <div class="panel-header panel-header-compact">
             <h3>SLOT {{ slot.slot_number }}</h3>
-            <code class="text-mono" style="font-size: var(--fs-sm);">{{ slot.nomor_resi }}</code>
+            <code class="text-mono kurang-resi-code">{{ slot.nomor_resi }}</code>
         </div>
 
         {% if slot.missing %}
-        <div style="margin-bottom: var(--space-3);">
-            <h4 style="color: var(--danger);">⚠ Kurang ({{ slot.missing|length }})</h4>
-            <ul style="list-style:none; padding:0; margin:0;">
+        <div class="kurang-section">
+            <h4 class="kurang-section-title kurang-section-title-missing">⚠ Kurang ({{ slot.missing|length }})</h4>
+            <ul class="kurang-list">
                 {% for m in slot.missing %}
                 <li class="kurang-item kurang-item-missing">
                     <div class="kurang-item-head">
-                        <code style="font-weight:700;">{{ m.sku }}</code>
-                        <small class="text-subtle">{{ m.varian }}pcs</small>
+                        <code class="kurang-item-sku">{{ m.sku }}</code>
+                        <small class="kurang-item-varian">{{ m.varian }}pcs</small>
                     </div>
-                    <div style="font-size: var(--fs-sm); margin-top: var(--space-1); color: var(--text-muted);">
+                    <div class="kurang-item-status">
                         {% if m.untouched %}
-                            <strong style="color: var(--danger);">BELUM DI-SCAN</strong>
-                            ({{ m.ordered_pcs }}pcs)
+                            <span class="kurang-item-status-bad">BELUM DI-SCAN</span>
+                            <span class="kurang-item-qty">({{ m.ordered_pcs }}pcs)</span>
                         {% else %}
-                            ✓ {{ m.fulfilled_pcs }}/{{ m.ordered_pcs }} pcs
-                            ({{ m.fulfilled }}/{{ m.ordered }} pack)
+                            <span>✓ {{ m.fulfilled_pcs }}/{{ m.ordered_pcs }}pcs</span>
+                            <span class="kurang-item-qty">({{ m.fulfilled }}/{{ m.ordered }} pack)</span>
                         {% endif %}
-                        {% if m.in_buffer %}<span class="match-tag">📦 di buffer</span>{% endif %}
+                        {% if m.in_buffer %}<span class="match-tag match-tag-buffer">📦 buffer</span>{% endif %}
                     </div>
                     {% if m.item_id %}
                     <form hx-post="{{ url_for('mark_prefilled_action', resi_id=slot.resi_id, item_id=m.item_id) }}"
                           hx-target="#dashboard-grids" hx-swap="innerHTML"
-                          style="margin-top: var(--space-2);">
+                          class="kurang-item-form">
                         <button type="submit"
                                 title="Tandai SKU ini sudah dari stok gudang"
-                                style="width:100%; background: var(--warning-soft); color: var(--warning-soft-text); border-color: var(--warning);">
+                                class="btn-gudang-compact">
                             📦 Sudah dari Gudang
                         </button>
                     </form>
@@ -58,25 +58,25 @@
         {% endif %}
 
         {% if slot.prefilled %}
-        <div>
-            <h4 style="color: var(--success);">✓ Stok Gudang ({{ slot.prefilled|length }})</h4>
-            <ul style="list-style:none; padding:0; margin:0;">
+        <div class="kurang-section">
+            <h4 class="kurang-section-title kurang-section-title-ok">✓ Stok Gudang ({{ slot.prefilled|length }})</h4>
+            <ul class="kurang-list">
                 {% for p in slot.prefilled %}
                 <li class="kurang-item kurang-item-prefilled">
                     <div class="kurang-item-head">
-                        <code style="font-weight:700;">{{ p.sku }}</code>
-                        <small class="text-subtle">{{ p.varian }}pcs</small>
+                        <code class="kurang-item-sku">{{ p.sku }}</code>
+                        <small class="kurang-item-varian">{{ p.varian }}pcs</small>
                     </div>
-                    <div style="font-size: var(--fs-sm); margin-top: var(--space-1); color: var(--success);">
-                        ✓ {{ p.ordered_pcs }}pcs sudah dari stok
+                    <div class="kurang-item-status kurang-item-status-ok">
+                        ✓ {{ p.ordered_pcs }}pcs dari stok
                     </div>
                     {% if p.item_id %}
                     <form hx-post="{{ url_for('mark_prefilled_action', resi_id=slot.resi_id, item_id=p.item_id) }}"
                           hx-target="#dashboard-grids" hx-swap="innerHTML"
                           hx-confirm="Lepas tanda 'dari Gudang' untuk SKU {{ p.sku }}?"
-                          style="margin-top: var(--space-2);">
-                        <button type="submit" title="Lepas tanda gudang" style="width:100%;">
-                            ↺ Lepas Tanda Gudang
+                          class="kurang-item-form">
+                        <button type="submit" title="Lepas tanda gudang" class="btn-gudang-compact btn-gudang-undo">
+                            ↺ Lepas Tanda
                         </button>
                     </form>
                     {% endif %}
@@ -87,7 +87,7 @@
         {% endif %}
 
         {% if not slot.missing and not slot.prefilled %}
-        <div class="empty-state" style="padding: var(--space-4) var(--space-2);">
+        <div class="empty-state" style="padding: var(--space-3) var(--space-2);">
             <div class="empty-state-icon">✓</div>
             <div class="empty-state-title">Slot lengkap</div>
             <div class="empty-state-hint">Tidak ada SKU yang kurang</div>
