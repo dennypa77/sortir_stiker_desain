@@ -67,9 +67,11 @@
 <div class="buffer-wrap">
     {% for w in buffer.wadahs %}
     {% set wadah_has_match = w.slots|selectattr('has_match')|list|length > 0 %}
+    {# Split 2 baris: ceil(N/2) kolom -> 10 slot:5x2, 12:6x2, 9:5x2 (5 atas, 4 bawah). #}
+    {% set buffer_cols = (w.slots|length + 1) // 2 %}
     <div class="buffer-wadah {% if wadah_has_match %}buffer-wadah-has-match{% endif %}">
         <div class="buffer-wadah-label">Wadah {{ w.nomor }}</div>
-        <div class="grid-buffer">
+        <div class="grid-buffer" style="--buffer-cols: {{ buffer_cols }};">
             {% for s in w.slots %}
             <div class="cell cell-buffer {% if s.sku %}cell-buffer-filled{% else %}cell-buffer-empty{% endif %} {% if s.has_match %}has-match{% endif %} {% if s.is_overflow %}cell-overflow{% endif %}"
                  data-skus="{% if s.has_match %}{{ s.sku }}{% endif %}"

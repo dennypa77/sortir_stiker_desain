@@ -543,11 +543,18 @@ code {
   margin-bottom: var(--space-1);
 }
 
-/* === Grid Slot Aktif (cards) === */
+/* === Grid Slot Aktif (cards) === fixed 9 kolom per baris.
+   30 slot -> 4 baris (9+9+9+3). 27 slot -> 3 baris penuh. */
 .grid-aktif {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  grid-template-columns: repeat(9, minmax(0, 1fr));
   gap: var(--space-2);
+}
+/* Compact fallback untuk layar sempit (< 1100px) — fluid biar tetap usable. */
+@media (max-width: 1100px) {
+  .grid-aktif {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  }
 }
 .cell {
   padding: var(--space-2);
@@ -703,9 +710,12 @@ code {
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
+/* Buffer slots — selalu 2 baris. Jumlah kolom = ceil(slot_count / 2),
+   di-set inline via template (var --buffer-cols, fallback 5 utk default 10 slot).
+   Contoh: 10 slot -> 5x2, 12 slot -> 6x2, 10 slot baru -> 5x2. */
 .grid-buffer {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(var(--buffer-cols, 5), minmax(0, 1fr));
   grid-template-rows: repeat(2, 1fr);
   gap: var(--space-1);
 }
