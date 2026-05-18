@@ -96,43 +96,30 @@ def load_config():
         return {}
 
 
-def connect_spreadsheet(cfg):
-    """Authenticate ke Google Sheets pakai config existing. Raise kalau gagal."""
-    url = cfg.get("gsheet_url", "").strip()
-    jpath = cfg.get("json_path", "").strip()
-
-    if not url:
+def verify_erp_config(cfg):
+    """Verifikasi ERP config + ping. Raise kalau gagal. Replaces connect_spreadsheet
+    pasca-cutover (gspread tidak lagi dipakai)."""
+    base = (cfg.get("erp_base_url") or "").strip()
+    secret = (cfg.get("erp_jwt_secret") or "").strip()
+    if not base:
         raise RuntimeError(
-            "config.json belum punya 'gsheet_url'.\n\n"
-            "Buka app.py → tab 'Koneksi Gudang' → isi URL spreadsheet & "
-            "Test Koneksi dulu, baru jalankan run_qc.py."
+            "config.json belum punya 'erp_base_url'.\n\n"
+            "Buka app.py → tab 'Koneksi Gudang' → set URL ERP "
+            "(mis. https://db.heavyobjectgroup.com) dan secret JWT, baru jalankan run_qc.py."
         )
-    if not jpath or not os.path.exists(jpath):
+    if not secret:
         raise RuntimeError(
-            f"File JSON credential tidak ditemukan:\n{jpath}\n\n"
-            "Set ulang path-nya via app.py tab 'Koneksi Gudang'."
+            "config.json belum punya 'erp_jwt_secret'.\n\n"
+            "Set ulang via app.py tab 'Koneksi Gudang' (atau edit config.json manual)."
         )
-
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    creds = Credentials.from_service_account_file(jpath, scopes=scopes)
-    client = gspread.authorize(creds)
-
-    if "spreadsheets/d/" in url:
-        ss = client.open_by_url(url)
-    else:
-        ss = client.open_by_key(url)
-
-    # Verifikasi sheet LIST_PESANAN ada
+    # Ping ERP via ERPClient
     try:
-        ss.worksheet("LIST_PESANAN")
-    except Exception:
-        raise RuntimeError(
-            "Sheet 'LIST_PESANAN' belum dibuat di spreadsheet.\n\n"
-            "Buat sheet baru bernama 'LIST_PESANAN'. Header akan auto-set saat "
-            "tim gudang upload pertama via Apps Script v7.0."
-        )
-
-    return ss
+        from erp_client import ERPClient
+        client = ERPClient.from_config(cfg)
+        client.ping()
+    except Exception as e:
+        raise RuntimeError(f"Koneksi ERP gagal:\n{e}")
+    return True
 
 
 def main():
@@ -156,17 +143,17 @@ def main():
     # Buat hidden launcher root dulu (provider TTS untuk QC window)
     launcher = QcLauncherRoot()
 
-    # Authenticate sheet
+    # Verifikasi koneksi ERP (PostgREST)
     try:
-        spreadsheet = connect_spreadsheet(cfg)
+        verify_erp_config(cfg)
     except Exception as e:
-        messagebox.showerror("Gagal Koneksi Sheet", str(e), parent=launcher)
+        messagebox.showerror("Gagal Koneksi ERP", str(e), parent=launcher)
         launcher.destroy()
         sys.exit(1)
 
     # Buka QC window
     try:
-        qc_window = QcStasiunWindow(launcher, spreadsheet)
+        qc_window = QcStasiunWindow(launcher, cfg)
     except Exception as e:
         messagebox.showerror("Gagal Buka Stasiun QC", str(e), parent=launcher)
         launcher.destroy()

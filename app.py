@@ -199,6 +199,9 @@ class BotApp(ctk.CTk):
 
         self.gs_client = None
         self.spreadsheet = None
+        # ERP integration (PostgREST di db.heavyobjectgroup.com). Lazy-init via _get_erp().
+        # Setelah cutover, semua data layer pakai ini menggantikan gspread.
+        self.erp_client = None
 
         self.scanner_db = None
         self.scanner_stock = None
@@ -317,31 +320,62 @@ class BotApp(ctk.CTk):
         )
         return xlsx_path
 
-    # --- TAB 1: Koneksi Gudang ---
+    # --- TAB 1: Koneksi Gudang (ERP PostgREST) ---
     def setup_tab_koneksi(self):
-        ctk.CTkLabel(self.tab1, text="Pengaturan Google Spreadsheet", font=("Segoe UI", 16, "bold")).pack(pady=10)
-        
-        self.url_frame = ctk.CTkFrame(self.tab1)
-        self.url_frame.pack(fill="x", padx=20, pady=5)
-        ctk.CTkLabel(self.url_frame, text="URL Spreadsheet:").pack(side="left", padx=10)
-        self.entry_url = ctk.CTkEntry(self.url_frame, width=400)
-        self.entry_url.pack(side="left", padx=10, fill="x", expand=True)
-        self.entry_url.insert(0, self.config_data.get("gsheet_url", ""))
+        ctk.CTkLabel(
+            self.tab1,
+            text="Koneksi ERP heavyobjectgroup",
+            font=("Segoe UI", 16, "bold"),
+        ).pack(pady=10)
 
-        self.json_frame = ctk.CTkFrame(self.tab1)
-        self.json_frame.pack(fill="x", padx=20, pady=5)
-        ctk.CTkLabel(self.json_frame, text="File JSON Credentials:").pack(side="left", padx=10)
-        self.entry_json = ctk.CTkEntry(self.json_frame, width=300)
-        self.entry_json.pack(side="left", padx=10, fill="x", expand=True)
-        self.entry_json.insert(0, self.config_data.get("json_path", ""))
-        self.btn_browse_json = ctk.CTkButton(self.json_frame, text="Cari JSON", command=self.browse_json)
-        self.btn_browse_json.pack(side="left", padx=10)
+        # ERP base URL
+        self.erp_url_frame = ctk.CTkFrame(self.tab1)
+        self.erp_url_frame.pack(fill="x", padx=20, pady=5)
+        ctk.CTkLabel(self.erp_url_frame, text="URL ERP (PostgREST):", width=180).pack(side="left", padx=10)
+        self.entry_erp_url = ctk.CTkEntry(
+            self.erp_url_frame,
+            placeholder_text="https://db.heavyobjectgroup.com",
+        )
+        self.entry_erp_url.pack(side="left", padx=10, fill="x", expand=True)
+        self.entry_erp_url.insert(0, self.config_data.get("erp_base_url", ""))
 
-        self.btn_test_conn = ctk.CTkButton(self.tab1, text="Test & Simpan Koneksi", command=self.test_connection)
+        # JWT secret
+        self.erp_secret_frame = ctk.CTkFrame(self.tab1)
+        self.erp_secret_frame.pack(fill="x", padx=20, pady=5)
+        ctk.CTkLabel(self.erp_secret_frame, text="JWT Secret:", width=180).pack(side="left", padx=10)
+        self.entry_erp_secret = ctk.CTkEntry(
+            self.erp_secret_frame,
+            placeholder_text="VPS_DB_JWT_SECRET (panjang base64)",
+            show="*",
+        )
+        self.entry_erp_secret.pack(side="left", padx=10, fill="x", expand=True)
+        self.entry_erp_secret.insert(0, self.config_data.get("erp_jwt_secret", ""))
+
+        # Default location UUID
+        self.erp_loc_frame = ctk.CTkFrame(self.tab1)
+        self.erp_loc_frame.pack(fill="x", padx=20, pady=5)
+        ctk.CTkLabel(self.erp_loc_frame, text="Default Location ID (UUID):", width=180).pack(side="left", padx=10)
+        self.entry_erp_loc = ctk.CTkEntry(
+            self.erp_loc_frame,
+            placeholder_text="UUID 'Gudang Stiker Siap Jual' (cari di /gudang/lokasi)",
+        )
+        self.entry_erp_loc.pack(side="left", padx=10, fill="x", expand=True)
+        self.entry_erp_loc.insert(0, self.config_data.get("erp_location_id", ""))
+
+        self.btn_test_conn = ctk.CTkButton(
+            self.tab1, text="Test & Simpan Koneksi ERP", command=self.test_connection,
+        )
         self.btn_test_conn.pack(pady=20)
-        
-        self.lbl_conn_status = ctk.CTkLabel(self.tab1, text="Status Koneksi: Belum Dites", text_color="gray")
+
+        self.lbl_conn_status = ctk.CTkLabel(
+            self.tab1, text="Status Koneksi: Belum Dites", text_color="gray",
+        )
         self.lbl_conn_status.pack()
+
+        # Legacy gspread fields (hidden — kept hanya untuk backward compat reading config.json).
+        # Tidak ditampilkan di UI; tetap di-save kalau ada di config supaya rollback mudah.
+        self.entry_url = None
+        self.entry_json = None
 
     def browse_json(self):
         path = fd.askopenfilename(filetypes=[("JSON Files", "*.json")])
@@ -350,34 +384,40 @@ class BotApp(ctk.CTk):
             self.entry_json.insert(0, path)
 
     def test_connection(self):
-        url = self.entry_url.get()
-        jpath = self.entry_json.get()
-        self.config_data["gsheet_url"] = url
-        self.config_data["json_path"] = jpath
+        """Save ERP config + ping ERP. Replaces gspread test_connection."""
+        base_url = self.entry_erp_url.get().strip()
+        secret = self.entry_erp_secret.get().strip()
+        location_id = self.entry_erp_loc.get().strip()
+
+        self.config_data["erp_base_url"] = base_url
+        self.config_data["erp_jwt_secret"] = secret
+        self.config_data["erp_location_id"] = location_id
         self.save_config()
-        
-        if not url or not os.path.exists(jpath):
-            self.lbl_conn_status.configure(text="Error: URL kosong atau JSON tidak ditemukan", text_color="red")
+
+        if not base_url:
+            self.lbl_conn_status.configure(text="Error: URL ERP kosong", text_color="red")
             return
-            
+        if not secret:
+            self.lbl_conn_status.configure(text="Error: JWT Secret kosong", text_color="red")
+            return
+
+        # Reset cached client supaya dapat config baru
+        self.erp_client = None
         try:
-            scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-            creds = Credentials.from_service_account_file(jpath, scopes=scopes)
-            self.gs_client = gspread.authorize(creds)
-            
-            if "spreadsheets/d/" in url:
-                self.spreadsheet = self.gs_client.open_by_url(url)
-            else:
-                self.spreadsheet = self.gs_client.open_by_key(url)
-                
-            # Test Read target sheets, make sure they exist
-            self.spreadsheet.worksheet("DATABASE_STIKER")
-            self.spreadsheet.worksheet("LOG_KELUAR")
-                
-            self.lbl_conn_status.configure(text="Berhasil Terhubung & Sheet Ditemukan!", text_color="green")
+            erp = self._get_erp()
+            erp.ping()
+            # Optional: tampilkan jumlah master stiker yang ke-fetch
+            master = erp.fetch_database_stiker(use_cache=False)
+            status_msg = (
+                f"Berhasil! ERP responsif, {len(master)} SKU stiker, "
+                f"lokasi {'OK' if location_id else 'BELUM di-set (akan pakai default)'}."
+            )
+            self.lbl_conn_status.configure(text=status_msg, text_color="green")
         except Exception as e:
             error_msg = str(e) if str(e) else repr(e)
-            self.lbl_conn_status.configure(text=f"Gagal Terhubung: {error_msg[:60]}", text_color="red")
+            self.lbl_conn_status.configure(
+                text=f"Gagal Test ERP: {error_msg[:80]}", text_color="red",
+            )
 
     # --- TAB 2: Pengaturan File ---
     def setup_tab_file(self):
@@ -950,6 +990,29 @@ class BotApp(ctk.CTk):
                 f"Jalankan menu Apps Script '📦 Kelola Gudang → 5. Setup Sheet PERMINTAAN_RESTOCK' dulu."
             )
 
+    def _get_erp(self):
+        """Lazy-init ERPClient dari config.json. Raise RuntimeError kalau config invalid.
+        Replaces gspread untuk semua data layer pasca-cutover (DATABASE_STIKER,
+        LOG_KELUAR, PERMINTAAN_RESTOCK, LIST_PESANAN).
+        """
+        if self.erp_client is not None:
+            return self.erp_client
+        try:
+            from erp_client import ERPClient, ERPClientError
+        except ImportError as e:
+            raise RuntimeError(
+                f"Module erp_client tidak ditemukan ({e}). Pastikan erp_client.py ada "
+                "di root project (auto-update via updater.py setelah cutover)."
+            )
+        try:
+            self.erp_client = ERPClient.from_config(self.config_data)
+        except ERPClientError as e:
+            raise RuntimeError(
+                f"ERP belum dikonfigurasi: {e}\n\n"
+                "Set di config.json: erp_base_url, erp_jwt_secret, erp_location_id."
+            )
+        return self.erp_client
+
     @staticmethod
     def pcs_to_lembar(pcs):
         """Konversi pcs → jumlah lembar (dibulatkan ke atas, 1 lbr = 100 pcs)."""
@@ -961,18 +1024,45 @@ class BotApp(ctk.CTk):
             return 0
         return math.ceil(n / RESTOCK_LEMBAR_PCS)
 
+    # ------------------------------------------------------------------
+    # Helpers untuk parse meta info dari catatan (operator/requester name)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _parse_restock_meta(catatan):
+        """Extract 'Requester: X' dan 'Print: Y' dari catatan field. Return (requester, operator)."""
+        if not catatan:
+            return ("", "")
+        req_match = re.search(r"Requester:\s*([^|]+?)(?:\s*\||$)", catatan)
+        op_match = re.search(r"Print:\s*([^|]+?)(?:\s*\||$)", catatan)
+        return (
+            req_match.group(1).strip() if req_match else "",
+            op_match.group(1).strip() if op_match else "",
+        )
+
+    @staticmethod
+    def _append_meta(catatan, key, value):
+        """Append/replace 'Key: value' di catatan string."""
+        existing = catatan or ""
+        # Replace kalau key sudah ada, else append
+        pattern = re.compile(rf"{re.escape(key)}:\s*[^|]+(\s*\||$)")
+        if pattern.search(existing):
+            new = pattern.sub(f"{key}: {value}\\1", existing, count=1).strip(" |")
+        else:
+            sep = " | " if existing.strip() else ""
+            new = f"{existing}{sep}{key}: {value}"
+        return new
+
     def refresh_wip_list(self):
-        if not self._ensure_gs_connected():
-            self.log_wip("ERROR: Tidak terhubung ke Google Sheets. Cek tab Koneksi.", "merah")
-            return
+        """Refresh daftar permintaan restock dari ERP (replace sheet PERMINTAAN_RESTOCK)."""
         try:
-            ws = self.get_restock_sheet()
-            rows = ws.get_all_values()
+            erp = self._get_erp()
         except RuntimeError as e:
             self.log_wip(f"ERROR: {e}", "merah")
             return
+        try:
+            rows = erp.fetch_restock_requests(wip_only=True)
         except Exception as e:
-            self.log_wip(f"ERROR baca sheet: {e}", "merah")
+            self.log_wip(f"ERROR fetch dari ERP: {e}", "merah")
             return
 
         # Clear existing rows in UI
@@ -982,119 +1072,146 @@ class BotApp(ctk.CTk):
             except Exception:
                 pass
 
-        # Group by status — only show WIP-like statuses.
-        # Layout v10.3: r[0]=Tanggal r[1]=SKU r[2]=Jumlah_Request r[3]=Jml_Bundle
-        # r[4]=Requester r[5]=Status r[6]=Tgl_Mulai r[7]=Operator
-        # r[8]=Jumlah_Aktual_Gudang r[9]=Approve r[10]=Tgl_Approve r[11]=Catatan
-        active = []  # (row_idx, row_data, status_lower)
-        for i, r in enumerate(rows[1:], start=2):
-            if len(r) < 6:
-                continue
-            status = str(r[5]).strip().lower()
-            if status in RESTOCK_WIP_STATUSES:
-                active.append((i, r, status))
-
-        # Sort: in_progress > pending > menunggu_approval (action priority for print)
+        # Sort: in_progress > pending > menunggu_approval (action priority untuk print)
         status_order = {"in_progress": 0, "pending": 1, "menunggu_approval": 2}
-        active.sort(key=lambda x: (status_order.get(x[2], 99), x[1][0] if len(x[1]) > 0 else ""))
+        active = sorted(
+            rows,
+            key=lambda r: (status_order.get(r.get("status", ""), 99), r.get("created_at", "")),
+        )
 
         if not active:
             self.lbl_wip_status.configure(text="Permintaan aktif: 0", text_color="#6b7280")
             ctk.CTkLabel(self.wip_scroll, text="(Tidak ada request aktif)", text_color="#6b7280").pack(pady=20)
             return
 
-        cnt_pending = sum(1 for x in active if x[2] == "pending")
-        cnt_inprog = sum(1 for x in active if x[2] == "in_progress")
-        cnt_wait = sum(1 for x in active if x[2] == "menunggu_approval")
+        cnt_pending = sum(1 for x in active if x.get("status") == "pending")
+        cnt_inprog = sum(1 for x in active if x.get("status") == "in_progress")
+        cnt_wait = sum(1 for x in active if x.get("status") == "menunggu_approval")
         self.lbl_wip_status.configure(
             text=(
                 f"Permintaan aktif: {len(active)} "
                 f"(pending {cnt_pending}, in_progress {cnt_inprog}, menunggu_approval {cnt_wait})"
             ),
-            text_color="#16a34a"
+            text_color="#16a34a",
         )
 
-        # Header row — kolom "Lembar" (estimasi 100 pcs/lbr) & "Aktual Gudang"
-        # (qty final dari verifikasi gudang, diinput langsung di sheet).
+        # Header row
         hdr = ctk.CTkFrame(self.wip_scroll, fg_color="#1f2937")
         hdr.pack(fill="x", pady=2)
         for label, w in [
             ("Tanggal", 130), ("SKU", 60), ("Req (pcs)", 80), ("Lembar", 70),
             ("Aktual Gudang", 100), ("Requester", 95),
-            ("Status", 135), ("Operator", 90), ("Action", 200)
+            ("Status", 135), ("Operator", 90), ("Action", 200),
         ]:
             ctk.CTkLabel(hdr, text=label, width=w, font=("Segoe UI", 11, "bold")).pack(side="left", padx=2)
 
         # Data rows
-        for row_idx, r, status in active:
+        for row in active:
+            req_id = row.get("id")
+            status = row.get("status", "")
+            item = row.get("item") or {}
+            if isinstance(item, list):
+                item = item[0] if item else {}
+            sku = (item.get("sku") if isinstance(item, dict) else None) or (row.get("sku_raw") or "")
+
+            requester_obj = row.get("requester")
+            if isinstance(requester_obj, list):
+                requester_obj = requester_obj[0] if requester_obj else None
+            print_op_obj = row.get("print_operator")
+            if isinstance(print_op_obj, list):
+                print_op_obj = print_op_obj[0] if print_op_obj else None
+
+            requester_name_fk = (requester_obj or {}).get("full_name", "") if requester_obj else ""
+            print_op_fk = (print_op_obj or {}).get("full_name", "") if print_op_obj else ""
+
+            requester_meta, print_op_meta = self._parse_restock_meta(row.get("catatan") or "")
+            requester_display = requester_name_fk or requester_meta or "-"
+            print_op_display = print_op_fk or print_op_meta or "-"
+
+            jumlah_req = row.get("jumlah_pcs_request") or 0
+            jml_bundle = row.get("jml_bundle") or 0
+            jml_gudang = row.get("jumlah_aktual_gudang")
+            tanggal = (row.get("created_at") or "")[:16].replace("T", " ")
+
             rf = ctk.CTkFrame(self.wip_scroll)
             rf.pack(fill="x", pady=1)
-            ctk.CTkLabel(rf, text=str(r[0])[:16], width=130, anchor="w").pack(side="left", padx=2)
-            ctk.CTkLabel(rf, text=str(r[1]) if len(r) > 1 else "", width=60).pack(side="left", padx=2)
-            jml_req = str(r[2]) if len(r) > 2 else ""
-            ctk.CTkLabel(rf, text=jml_req, width=80).pack(side="left", padx=2)
-            try:
-                pcs_req_int = int(jml_req) if jml_req else 0
-            except (ValueError, TypeError):
-                pcs_req_int = 0
-            lembar_display = f"≈ {self.pcs_to_lembar(pcs_req_int)} lbr" if pcs_req_int > 0 else "-"
+            ctk.CTkLabel(rf, text=tanggal, width=130, anchor="w").pack(side="left", padx=2)
+            ctk.CTkLabel(rf, text=str(sku), width=60).pack(side="left", padx=2)
+            ctk.CTkLabel(rf, text=str(jumlah_req), width=80).pack(side="left", padx=2)
+            lembar_display = f"≈ {self.pcs_to_lembar(jumlah_req)} lbr" if jumlah_req > 0 else "-"
             ctk.CTkLabel(rf, text=lembar_display, width=70, text_color="#93c5fd").pack(side="left", padx=2)
-            # Aktual Gudang (kol I = idx 8) — qty final dari verifikasi fisik gudang
-            jml_gudang = str(r[8]) if len(r) > 8 else ""
             gudang_color = "#34d399" if jml_gudang else "#6b7280"
-            ctk.CTkLabel(rf, text=jml_gudang or "-", width=100, text_color=gudang_color).pack(side="left", padx=2)
-            ctk.CTkLabel(rf, text=str(r[4]) if len(r) > 4 else "", width=95).pack(side="left", padx=2)
+            ctk.CTkLabel(
+                rf, text=str(jml_gudang) if jml_gudang else "-",
+                width=100, text_color=gudang_color,
+            ).pack(side="left", padx=2)
+            ctk.CTkLabel(rf, text=requester_display, width=95).pack(side="left", padx=2)
             ctk.CTkLabel(
                 rf, text=status, width=135,
-                text_color={"pending": "#fbbf24", "in_progress": "#3b82f6", "menunggu_approval": "#f59e0b"}.get(status, "#9ca3af")
+                text_color={"pending": "#fbbf24", "in_progress": "#3b82f6", "menunggu_approval": "#f59e0b"}.get(status, "#9ca3af"),
             ).pack(side="left", padx=2)
-            ctk.CTkLabel(rf, text=str(r[7]) if len(r) > 7 else "", width=90).pack(side="left", padx=2)
+            ctk.CTkLabel(rf, text=print_op_display, width=90).pack(side="left", padx=2)
 
             action_frame = ctk.CTkFrame(rf, fg_color="transparent")
             action_frame.pack(side="left", padx=2)
-
-            sku = str(r[1]) if len(r) > 1 else ""
-            jml_req_int = jml_req
 
             if status == "pending":
                 ctk.CTkButton(
                     action_frame, text="▶ Mulai", width=70,
                     fg_color="#3b82f6", hover_color="#2563eb",
-                    command=lambda ri=row_idx, s=sku, j=jml_req_int:
-                        threading.Thread(target=self.start_production, args=(ri, s, j), daemon=True).start()
+                    command=lambda rid=req_id, s=sku, j=jumlah_req:
+                        threading.Thread(target=self.start_production, args=(rid, s, j), daemon=True).start(),
                 ).pack(side="left", padx=2)
                 ctk.CTkButton(
                     action_frame, text="🗑 Hapus", width=70,
                     fg_color="#dc2626", hover_color="#b91c1c",
-                    command=lambda ri=row_idx, s=sku, j=jml_req_int:
-                        threading.Thread(target=self.delete_restock_entry, args=(ri, s, j), daemon=True).start()
+                    command=lambda rid=req_id, s=sku, j=jumlah_req:
+                        threading.Thread(target=self.delete_restock_entry, args=(rid, s, j), daemon=True).start(),
                 ).pack(side="left", padx=2)
             elif status == "in_progress":
                 ctk.CTkButton(
                     action_frame, text="✔ Selesai Produksi", width=150,
                     fg_color="#16a34a", hover_color="#15803d",
-                    command=lambda ri=row_idx, s=sku, j=jml_req_int:
-                        threading.Thread(target=self.finish_production, args=(ri, s, j), daemon=True).start()
+                    command=lambda rid=req_id, s=sku, j=jumlah_req:
+                        threading.Thread(target=self.finish_production, args=(rid, s, j), daemon=True).start(),
                 ).pack(side="left", padx=2)
             elif status == "menunggu_approval":
                 ctk.CTkLabel(
                     action_frame, text="⏳ Tunggu verifikasi gudang",
-                    text_color="#f59e0b", width=190
+                    text_color="#f59e0b", width=190,
                 ).pack(side="left", padx=2)
 
-    def start_production(self, row_idx, sku, jumlah_req):
-        """Klik 'Mulai Produksi' di row pending → set status=in_progress + isi tgl + operator."""
+    def start_production(self, request_id, sku, jumlah_req):
+        """Klik 'Mulai Produksi' (pending → in_progress). request_id sekarang UUID dari ERP."""
         op = self.entry_print_op.get().strip()
         if not op:
             self.log_wip("ERROR: Isi 'Nama Print Operator' dulu di atas, baru klik Mulai.", "merah")
             return
-        if not self._ensure_gs_connected():
+        try:
+            erp = self._get_erp()
+        except RuntimeError as e:
+            self.log_wip(f"ERROR: {e}", "merah")
             return
         try:
-            ws = self.get_restock_sheet()
-            today = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            # Update kolom F (Status), G (Tanggal_Mulai_Print), H (Print_Operator)
-            ws.update(range_name=f"F{row_idx}:H{row_idx}", values=[["in_progress", today, op]])
+            # Update via ERP. print_operator_id null (desktop tidak punya user UUID);
+            # nama disimpan di catatan field.
+            erp.start_restock_production(request_id, print_operator_user_id=None)
+            # Append nama operator ke catatan via PATCH terpisah
+            try:
+                from urllib.parse import quote
+                current = erp._request(
+                    "GET", "stiker_restock_requests",
+                    params={"id": f"eq.{request_id}", "select": "catatan"},
+                )
+                cur_cat = (current[0].get("catatan") if current else "") or ""
+                new_cat = self._append_meta(cur_cat, "Print", op)
+                erp._request(
+                    "PATCH", "stiker_restock_requests",
+                    params={"id": f"eq.{request_id}"},
+                    body={"catatan": new_cat},
+                )
+            except Exception as e:
+                self.log_wip(f"[WARN] Catatan operator gagal di-update: {e}", "kuning")
             try:
                 lbr = self.pcs_to_lembar(int(jumlah_req))
             except (ValueError, TypeError):
@@ -1102,108 +1219,78 @@ class BotApp(ctk.CTk):
             lbr_info = f" / ≈ {lbr} lbr" if lbr > 0 else ""
             self.log_wip(
                 f"▶ MULAI produksi SKU {sku} ({jumlah_req} pcs{lbr_info}) — operator: {op}",
-                "hijau"
+                "hijau",
             )
             self.refresh_wip_list()
         except Exception as e:
             self.log_wip(f"ERROR mulai produksi: {e}", "merah")
 
-    def finish_production(self, row_idx, sku, jumlah_req):
-        """Klik 'Selesai Produksi' di row in_progress → set status=menunggu_approval.
-
-        v10.3: tidak ada qty prompt lagi. Qty aktual hanya diinput tim gudang
-        di sheet kolom I (Jumlah_Aktual_Gudang) saat verifikasi fisik."""
+    def finish_production(self, request_id, sku, jumlah_req):
+        """Klik 'Selesai Produksi' (in_progress → menunggu_approval)."""
         confirm = messagebox.askyesno(
             "Konfirmasi Selesai Produksi",
             f"Tandai cetak SKU {sku} ({jumlah_req} pcs) SELESAI?\n\n"
             f"Status akan berubah ke 'menunggu_approval'.\n"
-            f"Tim gudang akan verifikasi fisik & isi kolom I (Jumlah_Aktual_Gudang)\n"
-            f"langsung di sheet, lalu centang Approve di kolom J."
+            f"Tim gudang akan verifikasi fisik di web ERP (/permintaan-restock):\n"
+            f"isi 'Jumlah Aktual Gudang' + klik Approve → stok otomatis bertambah.",
         )
         if not confirm:
             return
-        if not self._ensure_gs_connected():
-            return
         try:
-            ws = self.get_restock_sheet()
-            # Update kolom F (Status) saja — qty aktual diisi gudang nanti
-            ws.update_cell(row_idx, 6, "menunggu_approval")
+            erp = self._get_erp()
+            erp.finish_restock_production(request_id)
             self.log_wip(
                 f"✔ SELESAI cetak SKU {sku} (request {jumlah_req} pcs). "
-                f"Status → menunggu_approval. Tim gudang akan verifikasi fisik & isi qty aktual.",
-                "hijau"
+                f"Status → menunggu_approval. Tim gudang verifikasi & approve di web ERP.",
+                "hijau",
             )
             self.refresh_wip_list()
         except Exception as e:
             self.log_wip(f"ERROR selesai produksi: {e}", "merah")
 
-    def delete_restock_entry(self, row_idx, sku, jumlah):
-        """Hapus row request — hanya allowed untuk status=pending."""
+    def delete_restock_entry(self, request_id, sku, jumlah):
+        """Hapus permintaan (hanya status=pending — ERP enforce via trigger/precondition)."""
         confirm = messagebox.askyesno(
             "Konfirmasi Hapus Permintaan",
             f"HAPUS request SKU {sku} ({jumlah} pcs)?\n\n"
-            f"Hanya bisa hapus row dgn status 'pending'.\n"
-            f"Tindakan TIDAK BISA di-undo.\n\n"
-            f"Catatan: untuk in_progress/menunggu_approval, edit langsung di sheet."
+            f"Hanya bisa hapus permintaan dgn status 'pending'.\n"
+            f"Tindakan TIDAK BISA di-undo.",
         )
         if not confirm:
             return
-        if not self._ensure_gs_connected():
-            return
         try:
-            ws = self.get_restock_sheet()
-            # Re-check status sebelum hapus (race-safe) — kol F = 6
-            cur_status = ws.cell(row_idx, 6).value
-            if str(cur_status).strip().lower() != "pending":
-                self.log_wip(
-                    f"ERROR: status saat ini '{cur_status}' — hanya 'pending' yg boleh dihapus.",
-                    "merah"
-                )
-                self.refresh_wip_list()
-                return
-            ws.delete_rows(row_idx)
-            self.log_wip(f"🗑 Request SKU {sku} ({jumlah} pcs) dihapus dari baris {row_idx}.", "kuning")
+            erp = self._get_erp()
+            erp.delete_restock_request(request_id)
+            self.log_wip(f"🗑 Request SKU {sku} ({jumlah} pcs) dihapus.", "kuning")
             self.refresh_wip_list()
         except Exception as e:
-            self.log_wip(f"ERROR hapus row: {e}", "merah")
+            self.log_wip(f"ERROR hapus: {e}", "merah")
 
     def load_wip_map(self):
-        """Return dict {sku: total_pcs_in_pipeline} dari PERMINTAAN_RESTOCK.
-        Hitung row dgn status in [pending, in_progress, menunggu_approval].
-        Pakai Jumlah_Aktual_Gudang (kol I, idx 8) kalau sudah diisi, else Jumlah_Request (kol C, idx 2).
-        Layout v10.3: status di kol F (idx 5)."""
+        """Return dict {sku: total_pcs_in_pipeline} dari ERP stiker_restock_requests.
+        Status WIP: pending, in_progress, menunggu_approval.
+        Pakai jumlah_aktual_gudang kalau sudah diisi, else jumlah_pcs_request.
+        """
         wip_map = {}
-        if not self._ensure_gs_connected():
+        try:
+            erp = self._get_erp()
+        except RuntimeError:
             return wip_map
         try:
-            ws = self.spreadsheet.worksheet(PERMINTAAN_RESTOCK_SHEET_NAME)
-        except gspread.WorksheetNotFound:
-            return wip_map
-        try:
-            rows = ws.get_all_values()
+            rows = erp.fetch_restock_requests(wip_only=True)
         except Exception:
             return wip_map
-        for r in rows[1:]:
-            if len(r) < 6:
-                continue
-            status = str(r[5]).strip().lower()
-            if status not in RESTOCK_WIP_STATUSES:
-                continue
-            sku = str(r[1]).strip() if len(r) > 1 else ""
+        for row in rows:
+            item = row.get("item") or {}
+            if isinstance(item, list):
+                item = item[0] if item else {}
+            sku = (item.get("sku") if isinstance(item, dict) else None) or row.get("sku_raw") or ""
+            sku = str(sku).strip()
             if not sku:
                 continue
-            pcs_aktual_str = str(r[8]).strip() if len(r) > 8 else ""
-            pcs_req_str = str(r[2]).strip() if len(r) > 2 else ""
-            pcs = 0
-            try:
-                pcs = int(pcs_aktual_str) if pcs_aktual_str else 0
-            except ValueError:
-                pcs = 0
-            if pcs <= 0:
-                try:
-                    pcs = int(pcs_req_str)
-                except (ValueError, AttributeError):
-                    pcs = 0
+            pcs_aktual = row.get("jumlah_aktual_gudang")
+            pcs_request = row.get("jumlah_pcs_request") or 0
+            pcs = int(pcs_aktual) if pcs_aktual and pcs_aktual > 0 else int(pcs_request)
             if pcs > 0:
                 wip_map[sku] = wip_map.get(sku, 0) + pcs
         return wip_map
@@ -1221,16 +1308,16 @@ class BotApp(ctk.CTk):
 
     def load_scanner_data(self):
         self.lbl_scanner_status.configure(text="Status: Sedang memuat data... Mohon tunggu", text_color="orange")
-        self.print_scan_log("\n[INFO] Memulai sinkronisasi data gudang & pesanan...", "info")
-        
-        # Test Connection 
-        if not self.spreadsheet:
-            self.test_connection()
-            if not self.spreadsheet:
-                self.print_scan_log("ERROR: Gagal terhubung ke Google Sheets.", "merah")
-                self.lbl_scanner_status.configure(text="Status: Gagal Terhubung", text_color="red")
-                return
-                
+        self.print_scan_log("\n[INFO] Memulai sinkronisasi data gudang & pesanan dari ERP...", "info")
+
+        # Connect ke ERP (replace gspread)
+        try:
+            erp = self._get_erp()
+        except RuntimeError as e:
+            self.print_scan_log(f"ERROR: {e}", "merah")
+            self.lbl_scanner_status.configure(text="Status: ERP belum dikonfigurasi", text_color="red")
+            return
+
         excel_file = self.config_data.get("excel_path", "")
         if not excel_file or not os.path.exists(excel_file):
             self.print_scan_log("ERROR: File Pesanan Excel tidak valid di tab Pengaturan File.", "merah")
@@ -1238,16 +1325,8 @@ class BotApp(ctk.CTk):
             return
 
         try:
-            # Load GS
-            ws_db = self.spreadsheet.worksheet("DATABASE_STIKER")
-            db_records = ws_db.get_all_values()
-            stock_dict = {}
-            for row in db_records[1:]:
-                if len(row) >= 8:
-                    sku_id = str(row[0]).strip()
-                    try: stok_saat_ini = int(row[7])
-                    except ValueError: stok_saat_ini = 0
-                    stock_dict[sku_id] = stok_saat_ini
+            # Load stok dari ERP (replace DATABASE_STIKER sheet). Cache 5 menit di ERPClient.
+            stock_dict = erp.get_stock_dict(use_cache=False)
             self.scanner_stock = stock_dict
 
             # Load Excel
@@ -1374,14 +1453,14 @@ class BotApp(ctk.CTk):
         self.textbox_gudang.configure(state="disabled")
         
         self.progress.set(0)
-        
-        # Test Connection 
-        if not self.spreadsheet:
-            self.test_connection()
-            if not self.spreadsheet:
-                self.log_gui("ERROR: Gagal terhubung ke Google Sheets. Cek pengaturan.", "merah")
-                self.btn_start.configure(state="normal")
-                return
+
+        # Test Connection ERP — main_logic akan crash kalau ERP belum siap.
+        try:
+            self._get_erp()
+        except RuntimeError as e:
+            self.log_gui(f"ERROR: {e}", "merah")
+            self.btn_start.configure(state="normal")
+            return
 
         threading.Thread(target=self.run_process, daemon=True).start()
 
@@ -1483,20 +1562,17 @@ class BotApp(ctk.CTk):
         file_cache = self.create_file_cache(master_folder)
         if file_cache is None: return
 
-        # Load Stock from GS
-        self.log_gui("[INFO] Mengunduh data dari DATABASE_STIKER...", "info")
-        ws_db = self.spreadsheet.worksheet("DATABASE_STIKER")
-        db_records = ws_db.get_all_values()
-        
-        stock_dict = {}
-        for row in db_records[1:]:
-            if len(row) >= 8:
-                sku_id = str(row[0]).strip()
-                try: stok_saat_ini = int(row[7])
-                except ValueError: stok_saat_ini = 0
-                stock_dict[sku_id] = stok_saat_ini
-
-        ws_log = self.spreadsheet.worksheet("LOG_KELUAR")
+        # Load Stock dari ERP (replace DATABASE_STIKER sheet).
+        self.log_gui("[INFO] Mengunduh stok dari ERP (PostgREST)...", "info")
+        try:
+            erp = self._get_erp()
+            stock_dict = erp.get_stock_dict(use_cache=False)
+            # Cache full master untuk lookup item_id saat issue_goods_batch nanti.
+            stiker_master = erp.fetch_database_stiker(use_cache=True)
+            sku_to_item_id = {it["sku"]: it["id"] for it in stiker_master if it["sku"]}
+        except (RuntimeError, Exception) as e:
+            self.log_gui(f"ERROR fetch stok dari ERP: {e}", "merah")
+            return
 
         # Compile Excel rows into Task List
         self.log_gui("[INFO] Membaca & Mengurutkan pesanan Excel (Sort by SKU)...", "info")
@@ -1759,12 +1835,45 @@ class BotApp(ctk.CTk):
                     entry = success_logs[idx]
                     success_logs[idx] = (entry[0], entry[1], entry[2], f"Gagal Ekstrak - {e}")
 
-        # PUSH SHEETS
+        # PUSH ke ERP goods_issued (replace sheet LOG_KELUAR). Trigger DB
+        # handle_inventory_from_issued auto-decrement inventory.current_stock.
         if logs_keluar_to_append and auto_log_keluar:
-            self.log_gui(f"\n[INFO] Mengirim data stok keluar ke LOG_KELUAR...", "info")
-            ws_log.append_rows(logs_keluar_to_append)
+            self.log_gui(
+                f"\n[INFO] Mengirim {len(logs_keluar_to_append)} entri pengeluaran ke ERP "
+                f"(goods_issued)...",
+                "info",
+            )
+            items_to_issue = []
+            skipped_sku = []
+            for log_entry in logs_keluar_to_append:
+                date_iso, sku, qty, notes_full = log_entry
+                item_id = sku_to_item_id.get(sku)
+                if not item_id:
+                    skipped_sku.append(sku)
+                    continue
+                resi_match = re.match(r"Resi:\s*([^\s|]+)", notes_full)
+                nomor_resi = resi_match.group(1) if resi_match else None
+                extra = notes_full.split(" | ", 1)[1].strip() if " | " in notes_full else None
+                items_to_issue.append({
+                    "item_id": item_id,
+                    "quantity": qty,
+                    "nomor_resi": nomor_resi,
+                    "date_iso": date_iso,
+                    "extra_notes": extra,
+                })
+            try:
+                inserted = erp.issue_goods_batch(items_to_issue)
+                self.log_gui(f"[INFO] {inserted} row goods_issued ter-insert. Stok ERP otomatis dikurangi.", "info")
+            except Exception as e:
+                self.log_gui(f"[ERROR] Gagal push ke ERP: {e}", "merah")
+            if skipped_sku:
+                self.log_gui(
+                    f"[WARN] {len(skipped_sku)} SKU di-skip karena tidak ada di ERP items: "
+                    f"{', '.join(sorted(set(skipped_sku))[:10])}{'...' if len(set(skipped_sku)) > 10 else ''}",
+                    "kuning",
+                )
         elif not auto_log_keluar:
-            self.log_gui(f"\n[INFO] LOG_KELUAR DILEWATI sesuai opsi pra-eksekusi (mode manual).", "kuning")
+            self.log_gui(f"\n[INFO] Pengeluaran ERP DILEWATI sesuai opsi pra-eksekusi (mode manual).", "kuning")
 
         # WRITE LOG EXCEL LOCAL
         timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")

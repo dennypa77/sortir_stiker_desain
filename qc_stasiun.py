@@ -472,10 +472,13 @@ def stats_today():
 # SHEET ADAPTER
 # ============================================================
 class SheetAdapter:
-    """Read/write sheet LIST_PESANAN.
+    """Adapter ke ERP (PostgREST) untuk stiker_orders. Mengganti versi gspread sheet.
 
-    Cache resi data in-memory setelah refresh; auto-refresh kalau lebih dari 5 menit.
-    Semua write operation update cache lokal juga.
+    Nama 'SheetAdapter' dipertahankan supaya QcStasiunWindow tidak perlu di-refactor.
+    Cache in-memory 5 menit, semua write update cache lokal juga.
+
+    Sumber data: tabel stiker_orders di ERP (batch_id, nomor_resi, sku_varian,
+    jumlah_pack, jumlah_pcs, qc_status, qc_operator_id, qc_completed_at, qc_notes).
     """
 
     HEADER_EXPECTED = [
@@ -484,60 +487,58 @@ class SheetAdapter:
     ]
     NUM_COLS = 10
 
-    def __init__(self, spreadsheet):
-        self.spreadsheet = spreadsheet
-        self._sheet = None
+    def __init__(self, config_data):
+        """config_data: dict dari config.json (harus punya erp_base_url, erp_jwt_secret)."""
+        from erp_client import ERPClient, ERPClientError
+        try:
+            self.erp = ERPClient.from_config(config_data)
+        except ERPClientError as e:
+            raise RuntimeError(
+                f"ERP belum dikonfigurasi: {e}\n"
+                "Set di config.json: erp_base_url, erp_jwt_secret, erp_location_id."
+            )
         self._cache = None  # {resi: {batch_id, marketplace, rows: [...]}}
         self._cache_at = None
         self._lock = threading.Lock()
 
-    def _get_sheet(self):
-        if self._sheet is None:
-            self._sheet = self.spreadsheet.worksheet(SHEET_NAME)
-        return self._sheet
-
     def refresh(self):
-        """Fetch full sheet, rebuild cache."""
+        """Fetch stiker_orders dari ERP (tanpa filter — full list), rebuild cache."""
         with self._lock:
-            sheet = self._get_sheet()
-            all_values = sheet.get_all_values()
+            rows = self.erp.fetch_list_pesanan(today_only=False, limit=10000)
             cache = defaultdict(
                 lambda: {"batch_id": None, "marketplace": "", "rows": []}
             )
-            if len(all_values) >= 2:
-                for idx, row in enumerate(all_values[1:], start=2):
-                    if len(row) < self.NUM_COLS:
-                        row = list(row) + [""] * (self.NUM_COLS - len(row))
-                    batch_id = (row[0] or "").strip()
-                    resi = (row[2] or "").strip()
-                    sku_raw = (row[3] or "").strip()
-                    jumlah_str = (row[4] or "").strip()
-                    marketplace = (row[5] or "").strip()
-                    status = (row[6] or "").strip().lower()
+            for r in rows:
+                resi = (r.get("nomor_resi") or "").strip()
+                sku_raw = (r.get("sku_varian") or "").strip()
+                if not resi or not sku_raw:
+                    continue
+                batch = r.get("batch") or {}
+                if isinstance(batch, list):
+                    batch = batch[0] if batch else {}
+                batch_code = (
+                    (batch.get("batch_code") if isinstance(batch, dict) else None)
+                    or r.get("batch_id")
+                )
+                marketplace = (r.get("marketplace") or "").strip()
+                try:
+                    jumlah = int(r.get("jumlah_pack") or 1)
+                except (TypeError, ValueError):
+                    jumlah = 1
+                status = (r.get("qc_status") or STATUS_PENDING).strip().lower()
 
-                    if not resi or not sku_raw:
-                        continue
-
-                    try:
-                        jumlah = int(float(jumlah_str)) if jumlah_str else 1
-                    except (TypeError, ValueError):
-                        jumlah = 1
-
-                    cache[resi]["batch_id"] = batch_id or cache[resi]["batch_id"]
-                    cache[resi]["marketplace"] = (
-                        marketplace or cache[resi]["marketplace"]
-                    )
-                    cache[resi]["rows"].append(
-                        {
-                            "sheet_row": idx,
-                            "bigseller_sku": sku_raw,
-                            "jumlah": jumlah,
-                            "status": status or STATUS_PENDING,
-                            "qc_operator": (row[7] or "").strip(),
-                            "qc_completed_at": (row[8] or "").strip(),
-                            "qc_notes": (row[9] or "").strip(),
-                        }
-                    )
+                cache[resi]["batch_id"] = batch_code or cache[resi]["batch_id"]
+                cache[resi]["marketplace"] = marketplace or cache[resi]["marketplace"]
+                cache[resi]["rows"].append({
+                    "order_id": r.get("id"),
+                    "bigseller_sku": sku_raw,
+                    "jumlah": jumlah,
+                    "status": status,
+                    # operator_id UUID di DB; nama operator di-tag di qc_notes oleh app.
+                    "qc_operator": "",
+                    "qc_completed_at": r.get("qc_completed_at") or "",
+                    "qc_notes": r.get("qc_notes") or "",
+                })
             self._cache = dict(cache)
             self._cache_at = datetime.now()
 
@@ -565,32 +566,28 @@ class SheetAdapter:
         return count
 
     def update_resi_qc_status(self, resi_code, status, operator_name, notes=""):
-        """Tulis kolom G-J untuk SEMUA row resi tsb. Return True kalau ada yg di-update."""
+        """PATCH semua stiker_orders dengan nomor_resi tsb. Return True kalau ada yg ter-update."""
         resi_data = self.find_resi(resi_code)
         if not resi_data:
             return False
-        sheet = self._get_sheet()
         completed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        batch_updates = []
-        for row in resi_data["rows"]:
-            r = row["sheet_row"]
-            batch_updates.append(
-                {
-                    "range": f"G{r}:J{r}",
-                    "values": [[status, operator_name, completed_at, notes]],
-                }
-            )
-        if not batch_updates:
-            return False
+        # Tag operator name ke notes (desktop tidak punya user UUID)
+        full_notes = f"{notes} | QC: {operator_name}".strip(" |") if notes else f"QC: {operator_name}"
 
         with self._lock:
-            sheet.batch_update(batch_updates)
+            try:
+                updated = self.erp.update_resi_qc_status(
+                    resi_code, status, operator_user_id=None, notes=full_notes,
+                )
+            except Exception:
+                raise
+            if updated <= 0:
+                return False
             for row in resi_data["rows"]:
                 row["status"] = status
                 row["qc_operator"] = operator_name
                 row["qc_completed_at"] = completed_at
-                row["qc_notes"] = notes
+                row["qc_notes"] = full_notes
         return True
 
 
@@ -600,11 +597,13 @@ class SheetAdapter:
 class QcStasiunWindow(ctk.CTkToplevel):
     """Stasiun QC — window terpisah dari aplikasi utama."""
 
-    def __init__(self, parent, spreadsheet):
+    def __init__(self, parent, config_data):
+        """parent: tkinter parent. config_data: dict dari config.json (post-cutover
+        ERP integration; gspread spreadsheet tidak lagi dipakai)."""
         super().__init__(parent)
         self.parent = parent
-        self.spreadsheet = spreadsheet
-        self.adapter = SheetAdapter(spreadsheet)
+        self.config_data = config_data
+        self.adapter = SheetAdapter(config_data)
 
         # Stub operator: pakai nama workstation supaya audit trail tetap ada
         # tanpa minta login. Ganti via os env atau hardcode kalau perlu.

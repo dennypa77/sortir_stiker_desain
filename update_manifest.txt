@@ -15,6 +15,10 @@ run_qc.py
 test_qc_parser.py
 requirements.txt
 
+# === ERP integration (pasca cutover dari Google Sheets) ===
+erp_client.py
+migrate_sheet_to_erp.py
+
 # === Launcher batch ===
 start.bat
 start_qc.bat
