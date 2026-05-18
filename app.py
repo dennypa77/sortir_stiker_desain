@@ -23,6 +23,8 @@ import customtkinter as ctk
 import tkinter.filedialog as fd
 from tkinter import messagebox
 from openpyxl import load_workbook, Workbook
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse
 from PyPDF2 import PdfReader, PdfWriter
 from PyPDF2.errors import PdfReadError
 
@@ -30,6 +32,15 @@ from google.oauth2.service_account import Credentials
 import gspread
 
 CONFIG_FILE = "config.json"
+
+ERP_BRIDGE_DEFAULT_PORT = 8765
+ERP_BRIDGE_DEFAULT_ORIGINS = [
+    "https://staging.heavyobjectgroup.com",
+    "https://heavyobjectgroup.com",
+    "https://www.heavyobjectgroup.com",
+    "http://localhost:5173",  # vite dev
+    "http://localhost:3000",
+]
 
 PERMINTAAN_RESTOCK_SHEET_NAME = "PERMINTAAN_RESTOCK"
 PERMINTAAN_RESTOCK_HEADER = [
@@ -52,6 +63,113 @@ RESTOCK_WIP_STATUSES = {"pending", "in_progress", "menunggu_approval"}
 # Konversi pcs → bundle (untuk gudang) dan pcs → lembar (untuk tim print).
 RESTOCK_BUNDLE_PCS = 10    # 1 plastik kecil gudang = 10 pcs
 RESTOCK_LEMBAR_PCS = 100   # 1 lembar cetak (versi optimal) = 100 pcs
+
+class _ErpBridgeHandler(BaseHTTPRequestHandler):
+    """HTTP handler untuk terima data pesanan dari web ERP. bot_app & allowed_origins di-set saat start_erp_bridge."""
+    bot_app = None
+    allowed_origins: list = []
+
+    def log_message(self, format, *args):  # silence default access log
+        return
+
+    def _set_cors_headers(self):
+        origin = self.headers.get('Origin', '')
+        if origin in self.allowed_origins:
+            self.send_header('Access-Control-Allow-Origin', origin)
+            self.send_header('Vary', 'Origin')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.send_header('Access-Control-Max-Age', '600')
+
+    def _send_json(self, status, payload):
+        body = json.dumps(payload).encode('utf-8')
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self._set_cors_headers()
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self._set_cors_headers()
+        self.end_headers()
+
+    def do_GET(self):
+        if urlparse(self.path).path == '/health':
+            self._send_json(200, {
+                "status": "ok",
+                "app": "sortir_stiker_desain",
+                "ready": self.bot_app is not None,
+            })
+        else:
+            self._send_json(404, {"error": "not found"})
+
+    def do_POST(self):
+        if urlparse(self.path).path != '/import':
+            self._send_json(404, {"error": "not found"})
+            return
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+            raw = self.rfile.read(length) if length > 0 else b'{}'
+            payload = json.loads(raw.decode('utf-8'))
+        except Exception as e:
+            self._send_json(400, {"error": f"invalid JSON: {e}"})
+            return
+
+        items = payload.get('items')
+        if not isinstance(items, list) or len(items) == 0:
+            self._send_json(400, {"error": "items wajib array non-empty"})
+            return
+
+        cleaned = []
+        for i, it in enumerate(items):
+            if not isinstance(it, dict):
+                self._send_json(400, {"error": f"items[{i}] harus object"})
+                return
+            sku = it.get('sku')
+            lembar = it.get('jumlah_lembar')
+            if sku is None or lembar is None:
+                self._send_json(400, {"error": f"items[{i}] butuh field sku & jumlah_lembar"})
+                return
+            try:
+                lembar_int = int(lembar)
+            except (TypeError, ValueError):
+                self._send_json(400, {"error": f"items[{i}].jumlah_lembar harus integer"})
+                return
+            if lembar_int <= 0:
+                self._send_json(400, {"error": f"items[{i}].jumlah_lembar harus > 0"})
+                return
+            cleaned.append({"sku": str(sku).strip(), "jumlah_lembar": lembar_int})
+
+        batch_code = str(payload.get('batch_code', 'erp'))
+
+        # Eksekusi handler di UI thread (Tkinter tidak thread-safe)
+        result_holder = {}
+        done = threading.Event()
+        def run_on_ui():
+            try:
+                result_holder['xlsx'] = self.bot_app.handle_import_from_erp(batch_code, cleaned)
+            except Exception as exc:
+                result_holder['error'] = str(exc)
+            finally:
+                done.set()
+        self.bot_app.after(0, run_on_ui)
+        done.wait(timeout=10)
+
+        if 'error' in result_holder:
+            self._send_json(500, {"error": result_holder['error']})
+        elif 'xlsx' in result_holder:
+            self._send_json(200, {
+                "status": "ok",
+                "imported": len(cleaned),
+                "batch_code": batch_code,
+                "xlsx_path": result_holder['xlsx'],
+                "message": f"Berhasil import {len(cleaned)} SKU. Siap dieksekusi.",
+            })
+        else:
+            self._send_json(504, {"error": "UI thread timeout"})
+
 
 class BotApp(ctk.CTk):
     def __init__(self):
@@ -93,6 +211,9 @@ class BotApp(ctk.CTk):
         self.tts_thread = threading.Thread(target=self.tts_worker, daemon=True)
         self.tts_thread.start()
 
+        # Local HTTP bridge untuk terima data dari web ERP
+        self.start_erp_bridge()
+
     def tts_worker(self):
         while True:
             text = self.speech_queue.get()
@@ -129,6 +250,72 @@ class BotApp(ctk.CTk):
     def save_config(self):
         with open(CONFIG_FILE, "w") as f:
             json.dump(self.config_data, f, indent=4)
+
+    def start_erp_bridge(self):
+        """Start HTTP server di background daemon thread untuk terima POST dari web ERP."""
+        port = int(self.config_data.get('erp_bridge_port', ERP_BRIDGE_DEFAULT_PORT))
+        origins = self.config_data.get('erp_bridge_origins', ERP_BRIDGE_DEFAULT_ORIGINS)
+
+        _ErpBridgeHandler.bot_app = self
+        _ErpBridgeHandler.allowed_origins = list(origins)
+
+        try:
+            self._erp_bridge_server = ThreadingHTTPServer(('127.0.0.1', port), _ErpBridgeHandler)
+        except OSError as e:
+            print(f"[ERP-BRIDGE] Gagal start di port {port}: {e}")
+            return
+        self._erp_bridge_thread = threading.Thread(
+            target=self._erp_bridge_server.serve_forever, daemon=True
+        )
+        self._erp_bridge_thread.start()
+        print(f"[ERP-BRIDGE] Listening http://127.0.0.1:{port}")
+
+    def handle_import_from_erp(self, batch_code, items):
+        """Dipanggil dari _ErpBridgeHandler via self.after(0, ...). Tulis xlsx, update UI, log."""
+        out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'hasil', 'from_erp')
+        os.makedirs(out_dir, exist_ok=True)
+        safe_code = re.sub(r'[^\w\-]', '_', batch_code)[:64] or 'erp'
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        xlsx_path = os.path.join(out_dir, f'{safe_code}_{ts}.xlsx')
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Pesanan"
+        ws['A1'] = 'SKU'
+        ws['B1'] = 'Jumlah Lembar'
+        for i, it in enumerate(items, start=2):
+            ws.cell(row=i, column=1, value=it['sku'])
+            ws.cell(row=i, column=2, value=it['jumlah_lembar'])
+        wb.save(xlsx_path)
+
+        try:
+            self.entry_excel.delete(0, 'end')
+            self.entry_excel.insert(0, xlsx_path)
+        except Exception:
+            pass
+        self.config_data["excel_path"] = xlsx_path
+        self.save_config()
+
+        try:
+            self.tabview.set("Eksekusi & Log")
+        except Exception:
+            pass
+        try:
+            self.deiconify()
+            self.lift()
+            self.attributes('-topmost', True)
+            self.after(300, lambda: self.attributes('-topmost', False))
+            self.focus_force()
+        except Exception:
+            pass
+
+        total = sum(it['jumlah_lembar'] for it in items)
+        self.log_gui(
+            f"[IMPORT-ERP] Batch '{batch_code}' berhasil diimport: {len(items)} SKU, {total} lembar. "
+            f"File: {os.path.basename(xlsx_path)}. Siap dieksekusi — klik MULAI PROSES.",
+            "hijau"
+        )
+        return xlsx_path
 
     # --- TAB 1: Koneksi Gudang ---
     def setup_tab_koneksi(self):
