@@ -39,7 +39,7 @@ def harvester_pickup_scan(
 
     def _do(tc: sqlite3.Connection) -> HarvesterPickupResult:
         plastik = tc.execute(
-            "SELECT id, sku, varian, location_type, location_ref FROM plastik "
+            "SELECT id, sku, varian, location_type, location_ref, pack_units FROM plastik "
             "WHERE barcode = ? AND location_type = 'buffer' "
             "ORDER BY placed_at ASC, id ASC LIMIT 1",
             (barcode,),
@@ -71,7 +71,8 @@ def harvester_pickup_scan(
             "UPDATE harvester_task SET status = 'in_progress', started_at = ? WHERE id = ?",
             (now_iso(), task["task_id"]),
         )
-        decrement_buffer_slot(plastik["location_ref"], conn=tc)
+        pack_units = max(1, int(plastik["pack_units"] or 1))
+        decrement_buffer_slot(plastik["location_ref"], conn=tc, bundle_count=pack_units)
         tc.execute(
             "UPDATE plastik SET location_type = 'in_transit', location_ref = ? WHERE id = ?",
             (task["task_id"], plastik["id"]),
@@ -130,7 +131,7 @@ def harvester_dropoff_scan(
 
     def _do(tc: sqlite3.Connection) -> HarvesterDropoffResult:
         plastik = tc.execute(
-            "SELECT id, sku, varian, location_type, location_ref FROM plastik "
+            "SELECT id, sku, varian, location_type, location_ref, pack_units FROM plastik "
             "WHERE barcode = ? AND location_type = 'in_transit' "
             "ORDER BY id ASC LIMIT 1",
             (barcode,),
@@ -172,9 +173,10 @@ def harvester_dropoff_scan(
             raise HarvesterMismatchError(
                 f"Resi {task['nomor_resi']} sudah tidak butuh SKU {plastik['sku']}"
             )
+        pack_units = max(1, int(plastik["pack_units"] or 1))
         tc.execute(
-            "UPDATE resi_item SET quantity_fulfilled = quantity_fulfilled + 1 WHERE id = ?",
-            (item["id"],),
+            "UPDATE resi_item SET quantity_fulfilled = quantity_fulfilled + ? WHERE id = ?",
+            (pack_units, item["id"]),
         )
         tc.execute(
             "UPDATE plastik SET location_type = 'slot_aktif', location_ref = ?, "
@@ -262,25 +264,32 @@ def quick_harvest_to_resi(
             slot = find_buffer_slot_for_sku(item["sku"], conn=c)
             if slot is None or slot.plastik_count <= 0:
                 continue
-            n_move = min(slot.plastik_count, sisa)
-            plastiks = c.execute(
-                "SELECT id, barcode FROM plastik "
+            # Plastik tidak bisa di-split fisik. Pindah plastik satu-per-satu
+            # (FIFO) sampai sisa terpenuhi (atau buffer habis). Plastik bundle
+            # 50pcs (pack_units=5) bisa over-fulfill — itu OK, fisik tetap
+            # masuk ke slot aktif sebagai 1 unit plastik.
+            candidates = c.execute(
+                "SELECT id, barcode, pack_units FROM plastik "
                 "WHERE location_type = 'buffer' AND location_ref = ? "
-                "ORDER BY placed_at ASC, id ASC LIMIT ?",
-                (slot.buffer_slot_id, n_move),
+                "ORDER BY placed_at ASC, id ASC",
+                (slot.buffer_slot_id,),
             ).fetchall()
-            for p in plastiks:
+            for p in candidates:
+                if sisa <= 0:
+                    break
+                p_pack = max(1, int(p["pack_units"] or 1))
                 c.execute(
                     "UPDATE plastik SET location_type = 'slot_aktif', "
                     "location_ref = ?, placed_at = ? WHERE id = ?",
                     (resi_id, now_iso(), p["id"]),
                 )
-                decrement_buffer_slot(slot.buffer_slot_id, conn=c)
+                decrement_buffer_slot(slot.buffer_slot_id, conn=c, bundle_count=p_pack)
                 c.execute(
-                    "UPDATE resi_item SET quantity_fulfilled = quantity_fulfilled + 1 "
+                    "UPDATE resi_item SET quantity_fulfilled = quantity_fulfilled + ? "
                     "WHERE id = ?",
-                    (item["id"],),
+                    (p_pack, item["id"]),
                 )
+                sisa -= p_pack
                 moved.append(
                     {
                         "barcode": p["barcode"],
@@ -288,6 +297,7 @@ def quick_harvest_to_resi(
                         "wadah_nomor": slot.wadah_nomor,
                         "slot_number": slot.slot_number,
                         "to_slot_aktif": resi["slot_aktif_number"],
+                        "pack_units": p_pack,
                     }
                 )
             c.execute(
