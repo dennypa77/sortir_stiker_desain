@@ -59,7 +59,7 @@ def cancel_resi(resi_id: int, actor: str = "admin") -> dict:
             return {"resi_id": resi_id, "already": row["status"]}
 
         plastiks = c.execute(
-            "SELECT id, barcode, sku, varian FROM plastik "
+            "SELECT id, barcode, sku, varian, pack_units FROM plastik "
             "WHERE location_type = 'slot_aktif' AND location_ref = ?",
             (resi_id,),
         ).fetchall()
@@ -85,7 +85,8 @@ def cancel_resi(resi_id: int, actor: str = "admin") -> dict:
         ).fetchall()
         for ct in cancelled_tasks:
             in_transit = c.execute(
-                "SELECT id FROM plastik WHERE location_type = 'in_transit' AND location_ref = ?",
+                "SELECT id, pack_units FROM plastik "
+                "WHERE location_type = 'in_transit' AND location_ref = ?",
                 (ct["id"],),
             ).fetchall()
             for p in in_transit:
@@ -93,7 +94,8 @@ def cancel_resi(resi_id: int, actor: str = "admin") -> dict:
                     "UPDATE plastik SET location_type = 'buffer', location_ref = ? WHERE id = ?",
                     (ct["buffer_slot_id"], p["id"]),
                 )
-                increment_buffer_slot(ct["buffer_slot_id"], conn=c)
+                p_pack = max(1, int(p["pack_units"] or 1))
+                increment_buffer_slot(ct["buffer_slot_id"], conn=c, bundle_count=p_pack)
 
         rerouted = []
         for p in plastiks:
@@ -101,7 +103,10 @@ def cancel_resi(resi_id: int, actor: str = "admin") -> dict:
                 "UPDATE plastik SET location_type = NULL, location_ref = NULL WHERE id = ?",
                 (p["id"],),
             )
-            re = handle_scan_plastik(p["barcode"], operator_id=actor, conn=c)
+            p_pack = max(1, int(p["pack_units"] or 1))
+            re = handle_scan_plastik(
+                p["barcode"], operator_id=actor, conn=c, pack_units=p_pack
+            )
             rerouted.append({"barcode": p["barcode"], "action": re.action})
 
         log_event(

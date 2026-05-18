@@ -19,7 +19,14 @@ import shutil
 import sqlite3
 import hashlib
 import threading
-import winsound
+try:
+    import winsound  # type: ignore[import-not-found]
+except ImportError:  # non-Windows (Mac/Linux dev/CI): stub no-op
+    class _WinSoundStub:
+        @staticmethod
+        def Beep(*_args, **_kwargs):
+            return None
+    winsound = _WinSoundStub()  # type: ignore[assignment]
 from datetime import datetime
 from collections import defaultdict
 
