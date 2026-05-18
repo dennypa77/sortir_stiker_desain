@@ -54,11 +54,21 @@ Both apps authenticate with a service-account JSON whose path lives in `config.j
 Apps Script (`code.gs`) installs a `Kelola Gudang` menu in the spreadsheet; that menu is the single way new orders enter the system. `packing_router` only **reads** `LIST_PESANAN` and **appends** to `DATA_SALES` — it never overwrites either.
 
 ### Root desktop apps
-- **`app.py`** — CustomTkinter `BotApp` with 4 tabs: Koneksi Gudang (gspread auth + `config.json`), Pengaturan File (paths), Eksekusi & Log (the print pipeline that sorts BigSeller orders, deducts from `DATABASE_STIKER`, and writes batched PDFs to a hot folder split per varian: Batch 10 vs Batch 50, max 20 files per sub-batch), and Scanner Resi Gudang (audio-feedback resi lookup against in-memory cache).
+- **`app.py`** — CustomTkinter `BotApp` with 4 tabs: Koneksi Gudang (gspread auth + `config.json`), Pengaturan File (paths), Eksekusi & Log (the print pipeline that sorts BigSeller orders, deducts from `DATABASE_STIKER`, and writes batched PDFs to a hot folder split per varian: Batch 10 vs Batch 50, max 20 files per sub-batch), and Scanner Resi Gudang (audio-feedback resi lookup against in-memory cache). Juga menjalankan **local HTTP bridge** untuk web ERP — lihat section "ERP web bridge" di bawah.
 - **`qc_stasiun.py`** — DB layer (SQLite at `hasil/qc_data.db`, WAL, auto-migration when the old `operator_id NOT NULL` schema is detected; backup written next to the file) plus `QcStasiunWindow` (Toplevel) and dialogs. Operator login is currently dormant — `qc_seed.py` CLI still exists for re-enabling later.
 - **`run_qc.py`** — Standalone launcher that loads `config.json`, opens the spreadsheet, and shows `QcStasiunWindow`.
 - **`duplicate_files.py`** — Standalone dedup script (stable backup is `duplicate_files - stable.py`, kept on purpose).
 - **`updater.py`** — On every `start*.bat` run, fetches files listed in `update_manifest.txt` (or `FILES_TO_UPDATE` fallback) from `https://raw.githubusercontent.com/dennypa77/sortir_stiker_desain/main/`, overwrites the local copy if it differs. **`packing_router/` is NOT auto-updated**; updating it requires editing `updater.py`.
+
+### ERP web bridge (app.py → port 8765)
+
+`app.py` menjalankan local HTTP server di thread daemon (stdlib `ThreadingHTTPServer`, **no Flask**) yang menerima POST dari web ERP `staging.heavyobjectgroup.com/operation/produksi/stiker-desain/operator-print`. Operator klik tombol "Input ke Aplikasi" di web → data Batch Aktif terkirim ke aplikasi tanpa perlu pilih xlsx manual.
+
+- **`GET /health`** — discovery; web call dengan timeout 2.5s sebelum POST.
+- **`POST /import`** body `{ batch_code, batch_id?, source?, items: [{ sku, jumlah_lembar }] }` — handler tulis xlsx (`hasil/from_erp/<batch>_<timestamp>.xlsx`, kolom A=SKU B=Jumlah Lembar sesuai format pipeline existing), update `config_data["excel_path"]` + `entry_excel`, switch ke Tab 3, focus window (`deiconify + lift + topmost toggle`), dan log baris hijau. Operator tinggal klik MULAI PROSES.
+- Handler HTTP runs di thread terpisah; semua UI mutation di-dispatch ke main thread via `self.after(0, ...)` + `threading.Event` (Tkinter tidak thread-safe).
+- **CORS allowlist** di `config_data["erp_bridge_origins"]` (default: domain `heavyobjectgroup.com` + localhost dev). Port override via `config_data["erp_bridge_port"]` (default `8765`). Tanpa token auth — bergantung pada CORS allowlist + browser same-origin.
+- Browser HTTPS bisa POST ke `http://127.0.0.1:*` tanpa mixed-content (localhost secure context, Chrome 94+).
 
 ### packing_router (Flask web app)
 Owns its own DB: **`hasil/packing_router.db`** (SQLite, WAL, busy-retry with exponential backoff). Never touches `qc_data.db`. Auto-creates 8 tables + a default `DEFAULT_WADAH_COUNT=5` wadah on first launch.
