@@ -17,7 +17,8 @@ import os
 import time
 import urllib.request
 
-BASE_URL = "https://raw.githubusercontent.com/dennypa77/sortir_stiker_desain/main/"
+BRANCH = os.environ.get("UPDATER_BRANCH", "main").strip() or "main"
+BASE_URL = f"https://raw.githubusercontent.com/dennypa77/sortir_stiker_desain/{BRANCH}/"
 MANIFEST_FILE = "update_manifest.txt"
 
 # Fallback list (kompatibel dengan versi lama updater) kalau manifest gagal di-fetch
@@ -63,7 +64,7 @@ def _fetch_manifest():
 
 
 def check_for_updates():
-    print("Mencari pembaruan aplikasi dari server...")
+    print(f"Mencari pembaruan aplikasi dari server (branch: {BRANCH})...")
     files = _fetch_manifest()
     if files is None:
         files = FILES_TO_UPDATE
