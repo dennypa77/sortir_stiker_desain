@@ -4,12 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-Internal tooling for **PT Heavy Object Group / Stickitup** — custom die-cut sticker fulfillment. Three teams (print, gudang, packing/QC) share one Google Spreadsheet as the source of truth. The repo contains two largely independent applications that target **Windows 10/11** and **Python 3.10+** (tested on 3.13):
+Internal tooling for **PT Heavy Object Group / Stickitup** — custom die-cut sticker fulfillment. Three teams (print, gudang, packing/QC) share data. **Sejak 2026-05-18 source of truth pindah dari Google Spreadsheet ke ERP heavyobjectgroup** (`db.heavyobjectgroup.com` PostgREST). Google Spreadsheet `code.gs` Apps Script onEdit dipensiunkan; equivalent live di DB trigger. Repo berisi:
 
-1. **Root scripts** — CustomTkinter desktop apps for the original workflow (`app.py`, `run_qc.py`, `qc_stasiun.py`) plus a Google Apps Script (`code.gs`) pasted into the shared spreadsheet.
+1. **Root scripts** — CustomTkinter desktop apps for the original workflow (`app.py`, `run_qc.py`, `qc_stasiun.py`). Data layer (Tab 1/3/4/6 + QC station) via `erp_client.py` ke PostgREST. Sheet `DATA_SALES` masih dipakai oleh `packing_router/sheets_log.py` saat ini (akan dimigrasi terpisah).
 2. **`packing_router/` package** — a separate Flask + HTMX web app for the new sort-to-resi + SKU-sticky buffer workflow. It runs **alongside** the root scripts; per its own design, it must **not** modify the root files.
 
 UI text, comments, log messages, and exception messages are in **Indonesian** (Bahasa). Match that when editing.
+
+Target OS: **Windows 10/11**, **Python 3.10+** (dites 3.13).
 
 ## Common commands
 
@@ -40,25 +42,77 @@ git diff --stat HEAD -- app.py qc_stasiun.py run_qc.py qc_seed.py duplicate_file
 
 ## Architecture
 
-### Shared integration: one Google Spreadsheet
-Both apps authenticate with a service-account JSON whose path lives in `config.json` (root, gitignored). All cross-team coordination happens through sheets:
+### Primary integration: ERP heavyobjectgroup PostgREST (sejak 2026-05-18)
 
-| Sheet | Writer | Readers |
+Data layer Tab 1/3/4/6 di `app.py` + `qc_stasiun.py SheetAdapter` + `run_qc.py` pakai **`erp_client.py`** untuk talk ke `db.heavyobjectgroup.com` via PostgREST. Bridge JWT HS256 di-sign lokal dengan `VPS_DB_JWT_SECRET` (compatible dengan `erp-frontend/src/lib/server/vpsDbJwt.ts` di repo heavyobjectgroup).
+
+**Mapping sheet → ERP tabel** (cutover total):
+
+| Sheet (legacy) | ERP equivalent | Status |
 |---|---|---|
-| `DATABASE_STIKER` | `app.py`, Apps Script (opname sync) | `app.py` (stock check) |
-| `LOG_KELUAR` | `app.py` (Tab 3 with the LOG_KELUAR checkbox enabled) | audit |
-| `DATA_SALES` | Apps Script upload, `packing_router` append-on-pack | trend analytics |
-| `LIST_PESANAN` | Apps Script auto-populate from BigSeller upload | `run_qc.py`, `packing_router` (read-only) |
-| `STOK_OPNAME` | manual + Apps Script `Sinkronisasi Opname` | — |
+| `DATABASE_STIKER` | `items` (filter `sub_category_id` stiker) + `inventory` + `stiker_design_attributes` | **CUTOVER** — desktop baca via `erp.get_stock_dict()` / `erp.fetch_database_stiker()` |
+| `LOG_KELUAR` | `goods_issued` (trigger DB auto-decrement inventory) | **CUTOVER** — desktop tulis via `erp.issue_goods_batch()` |
+| `PERMINTAAN_RESTOCK` | `stiker_restock_requests` (lihat heavyobjectgroup migration 20260518_001) | **CUTOVER** — desktop Tab 6 via `erp.fetch_restock_requests` / `submit/start/finish/delete_restock_request` |
+| `LIST_PESANAN` | `stiker_orders` + `stiker_order_batches` + `stiker_order_allocations` | **CUTOVER** — QC station via `erp.fetch_list_pesanan()` / `update_resi_qc_status()`. Upload BigSeller pindah ke web `/operation/produksi/stiker-desain/list-pesanan` |
+| `STOK_OPNAME` | `stock_opname` table | **CUTOVER** — pakai web `/stiker-desain/opname` |
+| `DATA_SALES` | (belum dimigrasi — `packing_router/sheets_log.py` masih append ke sheet) | LEGACY |
 
-Apps Script (`code.gs`) installs a `Kelola Gudang` menu in the spreadsheet; that menu is the single way new orders enter the system. `packing_router` only **reads** `LIST_PESANAN` and **appends** to `DATA_SALES` — it never overwrites either.
+**Apps Script `code.gs`** (`onEdit` trigger) **dipensiunkan** pasca cutover — rename function ke `_onEdit_disabled_<date>` di Apps Script editor. Menu `Kelola Gudang` masih boleh dipakai untuk upload data sales lama (kalau perlu rollback), tapi behavior LOG_MASUK auto-write sudah berpindah ke DB trigger `trg_stiker_restock_on_approve` di sisi ERP.
+
+### erp_client.py (PostgREST client)
+
+Stdlib-only (no requests/httpx). Konsisten dengan `updater.py` & `app.py` HTTP bridge yang juga stdlib.
+
+- `ERPClient.from_config(config_data)` — factory dari `config.json` dict
+- JWT auto-refresh 60s sebelum exp (TTL 1 jam, role default `service_role`)
+- Threading lock untuk mint JWT thread-safe
+- In-memory cache 5 menit untuk `fetch_database_stiker` (8K SKU ~3 detik per fetch)
+- Methods: `get_stock_dict` / `get_item_id_by_sku` / `issue_goods` / `issue_goods_batch` / `fetch_list_pesanan` / `update_qc_status` / `find_resi` / `update_resi_qc_status` / `fetch_restock_requests` / `submit_restock_request` / `start_restock_production` / `finish_restock_production` / `delete_restock_request` / `resolve_location_id` / `ping`
+
+### config.json schema baru (post-cutover)
+
+```json
+{
+  "erp_base_url": "https://db.heavyobjectgroup.com",
+  "erp_jwt_secret": "<VPS_DB_JWT_SECRET, sama dengan PGRST_JWT_SECRET di VPS>",
+  "erp_location_id": "<UUID Gudang Stiker Siap Jual>",
+  "erp_jwt_role": "service_role",
+  "excel_path": "...", "master_path": "...", "hot_path": "...",
+  "kekurangan_path": "...", "print_operator_name": "...",
+  "gsheet_url": "<optional, legacy untuk packing_router>",
+  "json_path": "<optional, legacy service-account JSON>"
+}
+```
+
+`config.json` tetap gitignored. Setelah cutover, `gsheet_url` & `json_path` opsional (cuma dipakai `packing_router/sheets_log.py` untuk append `DATA_SALES`).
+
+### migrate_sheet_to_erp.py
+
+One-shot bulk migration script. Idempotent (re-runnable). Penggunaan:
+
+```bash
+python migrate_sheet_to_erp.py --dry-run    # preview, no write
+python migrate_sheet_to_erp.py              # real migration
+python migrate_sheet_to_erp.py --skip-items # hanya restock requests
+```
+
+Migrasi `DATABASE_STIKER` → `items` + `stiker_design_attributes` + `inventory.current_stock` @ default location ('Gudang Stiker Siap Jual'), dan `PERMINTAAN_RESTOCK` aktif (status WIP) → `stiker_restock_requests` dengan tag `Migrated from sheet PERMINTAAN_RESTOCK` di catatan. Skip SKU non-stiker (`-VN-` sheet pattern, `GK-` gantungan kunci prefix).
 
 ### Root desktop apps
-- **`app.py`** — CustomTkinter `BotApp` with 4 tabs: Koneksi Gudang (gspread auth + `config.json`), Pengaturan File (paths), Eksekusi & Log (the print pipeline that sorts BigSeller orders, deducts from `DATABASE_STIKER`, and writes batched PDFs to a hot folder split per varian: Batch 10 vs Batch 50, max 20 files per sub-batch), and Scanner Resi Gudang (audio-feedback resi lookup against in-memory cache). Juga menjalankan **local HTTP bridge** untuk web ERP — lihat section "ERP web bridge" di bawah.
-- **`qc_stasiun.py`** — DB layer (SQLite at `hasil/qc_data.db`, WAL, auto-migration when the old `operator_id NOT NULL` schema is detected; backup written next to the file) plus `QcStasiunWindow` (Toplevel) and dialogs. Operator login is currently dormant — `qc_seed.py` CLI still exists for re-enabling later.
-- **`run_qc.py`** — Standalone launcher that loads `config.json`, opens the spreadsheet, and shows `QcStasiunWindow`.
+- **`app.py`** — CustomTkinter `BotApp` dengan 6 tabs:
+  - Tab 1 Koneksi Gudang — input `erp_base_url`, `erp_jwt_secret`, `erp_location_id`. Test koneksi via `ERPClient.ping()` + preview `fetch_database_stiker` count. (Tab ini dulu pakai gspread URL+JSON, sudah cutover.)
+  - Tab 2 Pengaturan File — path Excel pesanan, Master PDF folder, Hot Folder output.
+  - Tab 3 Eksekusi & Log — print pipeline (sort BigSeller orders, baca stok via `erp.get_stock_dict()`, push pengeluaran via `erp.issue_goods_batch()` — trigger DB auto-decrement inventory). Batched PDF ke Hot Folder per varian (Batch 10 vs Batch 50, max 20 files/sub-batch).
+  - Tab 4 Scanner Resi Gudang — audio-feedback resi lookup, stok dari ERP.
+  - Tab 5 Cetak Kekurangan — reprint stiker dari Excel KEKURANGAN (tidak nyentuh stok).
+  - Tab 6 Permintaan Restock — list `stiker_restock_requests` dari ERP, start_production/finish_production/delete actions. Approve dilakukan di web ERP `/permintaan-restock` (perlu input `jumlah_aktual_gudang` + lokasi).
+  - Juga menjalankan **local HTTP bridge** untuk web ERP — lihat section "ERP web bridge" di bawah (arah berbeda: web ERP push xlsx ke desktop).
+- **`qc_stasiun.py`** — DB layer SQLite (`hasil/qc_data.db`, WAL, auto-migration old `operator_id NOT NULL` schema; backup di sebelah file). `SheetAdapter` rewrite pakai `ERPClient` — backend `stiker_orders` (bukan sheet `LIST_PESANAN` lagi). Constructor `SheetAdapter(config_data)` (sebelumnya `(spreadsheet)`). `QcStasiunWindow.__init__(parent, config_data)` (sebelumnya `(parent, spreadsheet)`). Operator name di-tag ke `qc_notes` field (desktop tidak punya user UUID).
+- **`run_qc.py`** — Standalone launcher. `verify_erp_config()` replaces `connect_spreadsheet()` — ping ERP saat startup.
+- **`erp_client.py`** — PostgREST HTTP client, lihat section "Primary integration" di atas.
+- **`migrate_sheet_to_erp.py`** — one-shot script Sheet → ERP, lihat section "migrate_sheet_to_erp.py" di atas.
 - **`duplicate_files.py`** — Standalone dedup script (stable backup is `duplicate_files - stable.py`, kept on purpose).
-- **`updater.py`** — On every `start*.bat` run, fetches files listed in `update_manifest.txt` (or `FILES_TO_UPDATE` fallback) from `https://raw.githubusercontent.com/dennypa77/sortir_stiker_desain/main/`, overwrites the local copy if it differs. **`packing_router/` is NOT auto-updated**; updating it requires editing `updater.py`.
+- **`updater.py`** — On every `start*.bat` run, fetches files listed in `update_manifest.txt` (or `FILES_TO_UPDATE` fallback) from `https://raw.githubusercontent.com/dennypa77/sortir_stiker_desain/main/`, overwrites the local copy if it differs. **`packing_router/` is NOT auto-updated**; updating it requires editing `updater.py`. Manifest sudah include `erp_client.py` + `migrate_sheet_to_erp.py`.
 
 ### ERP web bridge (app.py → port 8765)
 
@@ -100,14 +154,16 @@ Routes are grouped per role: `/operator/scan` (operator), `/harvester/queue` (ha
 
 ### Concurrency model
 - packing_router uses `BEGIN IMMEDIATE TRANSACTION` + retry on `SQLITE_BUSY` (`SQLITE_BUSY_RETRY_COUNT`, `SQLITE_BUSY_RETRY_BASE_MS`). Don't add long-held write transactions.
-- The QC app talks to gspread directly from the UI thread; expect ~60 reads/min and ~100 writes/min as the per-user Sheets API ceiling.
+- The QC app talks to PostgREST via `ERPClient` di UI thread (panggilan blocking). Per-PC operasi: ~10-30 read/menit, ~5-20 write/menit. PostgREST rate-limit 60 req/s per IP (nginx). Tidak ada per-user quota lagi (sebelumnya gspread quota: 60 read/min + 100 write/min per service account).
+- `ERPClient` cache in-memory 5 menit untuk `fetch_database_stiker` — kurangi roundtrip saat Tab 3 + Tab 4 + load_wip_map dipanggil bersamaan.
 
 ## Conventions worth respecting
 
 - **Don't modify root scripts when working in `packing_router/`.** That separation is load-bearing — `packing_router/README.md` documents it and a regression `git diff` should be empty. The one exception is `updater.py`, which must be edited explicitly if you want to ship `packing_router` via auto-update.
 - **Port, don't import, between root and `packing_router/`.** `parse_sku` was duplicated on purpose; if logic drifts in `app.py:BotApp.extract_numeric_id_and_pcs`, mirror it in `packing_router/utils.py` and update its tests.
 - **Use the env-var override pattern** (`PACKING_ROUTER_<KEY>`) for any new config in `packing_router/config.py`; tests rely on `monkeypatch.setattr(pr_config, ...)` rather than env vars.
-- **Writes to gspread are append/upsert only** for shared sheets — never overwrite or delete `LIST_PESANAN` / `DATA_SALES` rows from Python; bulk maintenance is done by `code.gs` menu items.
+- **Writes ke ERP via `ERPClient` saja** untuk data layer baru. Jangan re-introduce gspread call di Tab 1/3/4/6 atau QC station — pattern udah cutover ke PostgREST. `packing_router/sheets_log.py` masih append `DATA_SALES` (legacy, pending migration berikutnya).
+- **`gspread` library tetap di `requirements.txt`** karena `migrate_sheet_to_erp.py` baca sheet sebagai source, dan `packing_router/sheets_log.py` masih append `DATA_SALES`. Jangan remove sampai semua migrasi selesai.
 - **Windows-specific calls** (`winsound.Beep`, `os.startfile`, `.bat` launchers, `pygame` audio) live only in the root apps. Keep `packing_router` cross-platform — it has to run on dev macOS/Linux for tests.
 - **Indonesian copy.** UI labels, exception messages, log lines, and most docstrings are in Bahasa Indonesia. New strings should match.
 - **Data files are gitignored** (`hasil/`, `*.db`, `*.json`, `data.xlsx`, `Kurang-*.xlsx`, `DATA-V10.xlsx`, `KEKURANGAN-V10.xlsx`). Don't commit a real `config.json` — it holds the service-account path.
