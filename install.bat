@@ -4,7 +4,7 @@ echo Menginstal Modul Python untuk Bot Sortir Stiker
 echo ====================================================
 echo.
 
-pip install -r requirements.txt
+py -3.13 -m pip install -r requirements.txt
 
 echo.
 echo ====================================================

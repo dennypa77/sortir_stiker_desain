@@ -2,10 +2,10 @@
 echo ====================================================
 echo Menjalankan Auto-Updater Bot Sortir Stiker...
 echo ====================================================
-python updater.py
+py -3.13 updater.py
 
 echo ====================================================
 echo Membuka Stasiun QC...
 echo ====================================================
-python run_qc.py
+py -3.13 run_qc.py
 pause

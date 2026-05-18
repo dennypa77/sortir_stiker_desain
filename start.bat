@@ -2,10 +2,10 @@
 echo ====================================================
 echo Menjalankan Auto-Updater Bot Sortir Stiker...
 echo ====================================================
-python updater.py
+py -3.13 updater.py
 
 echo ====================================================
 echo Membuka Aplikasi Sortir Stiker...
 echo ====================================================
-python app.py
+py -3.13 app.py
 pause

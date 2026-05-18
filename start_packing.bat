@@ -2,16 +2,16 @@
 echo ====================================================
 echo Menjalankan Auto-Updater Bot Sortir Stiker...
 echo ====================================================
-python updater.py
+py -3.13 updater.py
 
 echo ====================================================
 echo Memastikan dependency packing_router terinstal...
 echo ====================================================
-pip install -q -r packing_router\requirements.txt
+py -3.13 -m pip install -q -r packing_router\requirements.txt
 
 echo ====================================================
 echo Memulai Packing Router (web dashboard)...
 echo Buka browser: http://localhost:5000
 echo ====================================================
-python -m packing_router.web.app
+py -3.13 -m packing_router.web.app
 pause
