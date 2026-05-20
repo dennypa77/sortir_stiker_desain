@@ -31,6 +31,24 @@ from tkinter import messagebox
 # ============================================================
 DB_FILE = os.path.join("hasil", "qc_data.db")
 SHEET_NAME = "LIST_PESANAN"
+HASIL_QC_SHEET = "Hasil QC"
+
+# ============================================================
+# VERSI & CHANGELOG
+# ============================================================
+# Naikkan QC_VERSION tiap rilis + tambahkan entry di QC_CHANGELOG. Setelah
+# updater menarik file baru, popup log update muncul sekali (versi tersimpan di
+# VERSION_FILE), lalu nomor versi terlihat permanen di judul aplikasi.
+QC_VERSION = "1.1.0"
+QC_CHANGELOG = {
+    "1.1.0": [
+        "Versi aplikasi sekarang tampil di judul (pojok kiri atas).",
+        "Log update otomatis muncul sekali setiap aplikasi diperbarui.",
+        "Refresh Data menampilkan jumlah resi yang berhasil dimuat.",
+        "Setiap hasil QC (LOLOS / REJECT) dicatat ke sheet 'Hasil QC' untuk diolah.",
+    ],
+}
+VERSION_FILE = os.path.join("hasil", "qc_version.txt")
 
 STATUS_PENDING = "pending"
 STATUS_IN_PROGRESS = "in_progress"
@@ -110,6 +128,51 @@ def detect_marketplace(resi):
 
 def hash_pin(pin):
     return hashlib.sha256(str(pin).strip().encode("utf-8")).hexdigest()
+
+
+# ============================================================
+# VERSI HELPERS
+# ============================================================
+def _version_tuple(v):
+    parts = []
+    for p in str(v or "0").split("."):
+        try:
+            parts.append(int(p))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts)
+
+
+def read_last_seen_version():
+    """Baca versi yang terakhir dilihat user dari VERSION_FILE. None kalau belum ada."""
+    try:
+        if os.path.exists(VERSION_FILE):
+            with open(VERSION_FILE, "r", encoding="utf-8") as f:
+                return f.read().strip() or None
+    except Exception:
+        pass
+    return None
+
+
+def write_last_seen_version(version):
+    try:
+        _ensure_db_dir()  # hasil/ dir
+        with open(VERSION_FILE, "w", encoding="utf-8") as f:
+            f.write(str(version))
+    except Exception as e:
+        print(f"[QC versi] gagal simpan versi: {e}")
+
+
+def changes_since(last_seen):
+    """List (versi, [perubahan]) untuk versi > last_seen dan <= QC_VERSION, urut naik."""
+    cur = _version_tuple(QC_VERSION)
+    last = _version_tuple(last_seen) if last_seen else (0,)
+    out = []
+    for ver in sorted(QC_CHANGELOG.keys(), key=_version_tuple):
+        vt = _version_tuple(ver)
+        if last < vt <= cur:
+            out.append((ver, QC_CHANGELOG[ver]))
+    return out
 
 
 # ============================================================
@@ -477,9 +540,16 @@ class SheetAdapter:
     ]
     NUM_COLS = 10
 
+    # Header sheet "Hasil QC" — log audit hasil QC untuk diolah jadi data.
+    HASIL_QC_HEADER = [
+        "Timestamp", "Nomor_Resi", "Marketplace", "Batch_ID",
+        "Hasil", "Operator", "Alasan_Reject", "Catatan",
+    ]
+
     def __init__(self, spreadsheet):
         self.spreadsheet = spreadsheet
         self._sheet = None
+        self._hasil_sheet = None
         self._cache = None  # {resi: {batch_id, marketplace, rows: [...]}}
         self._cache_at = None
         self._lock = threading.Lock()
@@ -488,6 +558,56 @@ class SheetAdapter:
         if self._sheet is None:
             self._sheet = self.spreadsheet.worksheet(SHEET_NAME)
         return self._sheet
+
+    def _get_hasil_sheet(self):
+        """Ambil worksheet 'Hasil QC'; buat otomatis + set header kalau belum ada."""
+        if self._hasil_sheet is not None:
+            return self._hasil_sheet
+        try:
+            ws = self.spreadsheet.worksheet(HASIL_QC_SHEET)
+        except Exception:
+            # Belum ada — buat baru lalu isi header di baris 1.
+            ws = self.spreadsheet.add_worksheet(
+                title=HASIL_QC_SHEET,
+                rows=2000,
+                cols=len(self.HASIL_QC_HEADER),
+            )
+            ws.append_row(self.HASIL_QC_HEADER, value_input_option="USER_ENTERED")
+        else:
+            # Sheet sudah ada (mis. dibuat manual) — pastikan header terisi.
+            try:
+                first_row = ws.row_values(1)
+            except Exception:
+                first_row = []
+            if not first_row:
+                ws.append_row(
+                    self.HASIL_QC_HEADER, value_input_option="USER_ENTERED"
+                )
+        self._hasil_sheet = ws
+        return self._hasil_sheet
+
+    def ensure_hasil_qc_sheet(self):
+        """Pastikan worksheet 'Hasil QC' ada (buat kalau belum). Idempotent."""
+        self._get_hasil_sheet()
+
+    def append_qc_result(
+        self, resi_code, marketplace, batch_id, hasil,
+        operator, reject_reason="", notes="",
+    ):
+        """Tambah 1 baris ke sheet 'Hasil QC'. hasil = 'LOLOS' / 'REJECT'."""
+        sheet = self._get_hasil_sheet()
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        row = [
+            ts, resi_code, marketplace or "", batch_id or "",
+            hasil, operator or "", reject_reason or "", notes or "",
+        ]
+        with self._lock:
+            sheet.append_row(row, value_input_option="USER_ENTERED")
+
+    def get_total_resi_count(self):
+        """Jumlah resi unik yang termuat di cache (semua status)."""
+        self._ensure_cache()
+        return len(self._cache or {})
 
     def refresh(self):
         """Fetch full sheet, rebuild cache."""
@@ -623,7 +743,7 @@ class QcStasiunWindow(ctk.CTkToplevel):
             self.after(100, self.destroy)
             return
 
-        self.title("Stasiun QC HOG")
+        self.title(f"Stasiun QC HOG v{QC_VERSION}")
         self.geometry("1080x760")
         self.minsize(960, 680)
 
@@ -638,7 +758,43 @@ class QcStasiunWindow(ctk.CTkToplevel):
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
+        # Tampilkan log update sekali kalau versi naik sejak terakhir dibuka.
+        self.after(700, self._maybe_show_update_log)
+
+        # Pre-create sheet "Hasil QC" di background supaya langsung terlihat ada
+        # (kegagalan tidak boleh mengganggu alur utama).
+        self.after(900, self._ensure_hasil_sheet_async)
+
     # ---- helpers shared ----
+    def _ensure_hasil_sheet_async(self):
+        self._run_async(
+            self.adapter.ensure_hasil_qc_sheet,
+            on_done=lambda _: None,
+            on_error=lambda e: print(f"[Hasil QC] pre-create gagal: {e}"),
+        )
+
+    def _maybe_show_update_log(self):
+        """Tampilkan dialog log update sekali kalau QC_VERSION naik sejak
+        terakhir dibuka. First run benar-benar baru = baseline diam."""
+        try:
+            last_seen = read_last_seen_version()
+        except Exception:
+            last_seen = None
+        if last_seen == QC_VERSION:
+            return
+        # Instalasi benar-benar baru = belum ada VERSION_FILE DAN belum ada DB QC.
+        # Kalau DB sudah ada tapi VERSION_FILE belum, berarti ini upgrade dari
+        # versi lama (sebelum fitur versi ada) — tetap tampilkan log update.
+        is_fresh_install = (not last_seen) and (not os.path.exists(DB_FILE))
+        changes = changes_since(last_seen)
+        write_last_seen_version(QC_VERSION)
+        if is_fresh_install or not changes:
+            return  # instalasi baru / tidak ada catatan — jangan ganggu
+        try:
+            UpdateLogDialog(self, QC_VERSION, changes)
+        except Exception as e:
+            print(f"[QC update log] gagal tampilkan dialog: {e}")
+
     def speak(self, text):
         try:
             self.parent.speak(text)
@@ -716,7 +872,7 @@ class QcStasiunWindow(ctk.CTkToplevel):
 
         self.lbl_title = ctk.CTkLabel(
             self.header,
-            text="STASIUN QC HOG",
+            text=f"STASIUN QC HOG  v{QC_VERSION}",
             font=("Segoe UI", 20, "bold"),
             text_color="#f8fafc",
         )
@@ -1411,6 +1567,8 @@ class QcStasiunWindow(ctk.CTkToplevel):
         operator_name = self.current_operator["name"]
         resi_code = self.current_resi_code
         sid = self.current_session_id
+        marketplace = (self.current_resi_data or {}).get("marketplace") or ""
+        batch_id = (self.current_resi_data or {}).get("batch_id") or ""
 
         def do_update():
             self.adapter.update_resi_qc_status(
@@ -1418,6 +1576,15 @@ class QcStasiunWindow(ctk.CTkToplevel):
             )
             close_session(sid, STATUS_QC_APPROVED)
             log_event(sid, self.current_operator["id"], "approve", {"resi": resi_code})
+            # Catat ke sheet "Hasil QC" — kegagalan di sini tidak boleh
+            # membatalkan approve yang sudah tersimpan di LIST_PESANAN.
+            try:
+                self.adapter.append_qc_result(
+                    resi_code, marketplace, batch_id,
+                    "LOLOS", operator_name,
+                )
+            except Exception as e:
+                print(f"[Hasil QC] gagal catat approve {resi_code}: {e}")
             return True
 
         def done(_):
@@ -1455,6 +1622,8 @@ class QcStasiunWindow(ctk.CTkToplevel):
         operator_name = self.current_operator["name"]
         resi_code = self.current_resi_code
         sid = self.current_session_id
+        marketplace = (self.current_resi_data or {}).get("marketplace") or ""
+        batch_id = (self.current_resi_data or {}).get("batch_id") or ""
         full_notes = f"{reason}: {notes}".strip(": ").strip()
 
         def do_update():
@@ -1468,6 +1637,14 @@ class QcStasiunWindow(ctk.CTkToplevel):
                 "reject",
                 {"resi": resi_code, "reason": reason, "notes": notes},
             )
+            try:
+                self.adapter.append_qc_result(
+                    resi_code, marketplace, batch_id,
+                    "REJECT", operator_name,
+                    reject_reason=reason, notes=notes,
+                )
+            except Exception as e:
+                print(f"[Hasil QC] gagal catat reject {resi_code}: {e}")
             return True
 
         def done(_):
@@ -1514,20 +1691,34 @@ class QcStasiunWindow(ctk.CTkToplevel):
 
         def do():
             self.adapter.refresh()
-            return self.adapter.get_pending_resi_count()
+            return (
+                self.adapter.get_total_resi_count(),
+                self.adapter.get_pending_resi_count(),
+            )
 
-        def done(count):
+        def done(result):
+            total, pending = result
             self.lbl_pending.configure(
-                text=f"Pending di sheet: {count} resi", text_color=COLOR_INFO
+                text=f"✔ Berhasil load {total} resi  •  {pending} pending QC",
+                text_color=COLOR_HIJAU,
             )
             if not silent:
-                self.btn_refresh.configure(state="normal", text="Refresh Data")
+                # Konfirmasi visual di tombol, lalu balik normal setelah 2 detik.
+                self.btn_refresh.configure(state="normal", text="✔ Berhasil")
+                self.after(
+                    2000,
+                    lambda: self.btn_refresh.winfo_exists()
+                    and self.btn_refresh.configure(text="Refresh Data"),
+                )
             if then:
                 then()
 
         def err(e):
             if not silent:
                 self.btn_refresh.configure(state="normal", text="Refresh Data")
+            self.lbl_pending.configure(
+                text="✗ Gagal load data", text_color=COLOR_MERAH
+            )
             messagebox.showerror(
                 "Gagal Refresh",
                 f"Gagal fetch sheet LIST_PESANAN:\n{e}",
@@ -1551,6 +1742,69 @@ class QcStasiunWindow(ctk.CTkToplevel):
 # ============================================================
 # DIALOGS
 # ============================================================
+class UpdateLogDialog(ctk.CTkToplevel):
+    """Popup log update — muncul sekali setelah aplikasi diperbarui ke versi baru."""
+
+    def __init__(self, parent, version, changes):
+        super().__init__(parent)
+        self.title("Aplikasi Diperbarui")
+        self.geometry("520x440")
+        self.resizable(False, False)
+        try:
+            self.transient(parent)
+            self.grab_set()
+        except Exception:
+            pass
+
+        ctk.CTkLabel(
+            self,
+            text="🎉 Aplikasi Berhasil Diperbarui",
+            font=("Segoe UI", 18, "bold"),
+            text_color=COLOR_HIJAU,
+        ).pack(pady=(18, 2))
+        ctk.CTkLabel(
+            self,
+            text=f"Sekarang menjalankan versi v{version}",
+            font=("Segoe UI", 12),
+            text_color=COLOR_INFO,
+        ).pack(pady=(0, 10))
+
+        box = ctk.CTkScrollableFrame(self, fg_color="#0f172a")
+        box.pack(fill="both", expand=True, padx=18, pady=4)
+
+        # changes: list of (versi, [perubahan]) — urut naik, tampilkan terbaru dulu
+        for ver, items in reversed(changes):
+            ctk.CTkLabel(
+                box,
+                text=f"v{ver}",
+                font=("Segoe UI", 13, "bold"),
+                text_color=COLOR_BORDER,
+                anchor="w",
+            ).pack(fill="x", padx=8, pady=(8, 2))
+            for it in items:
+                ctk.CTkLabel(
+                    box,
+                    text=f"•  {it}",
+                    font=("Segoe UI", 12),
+                    text_color="#e2e8f0",
+                    anchor="w",
+                    justify="left",
+                    wraplength=440,
+                ).pack(fill="x", padx=16, pady=1)
+
+        btn = ctk.CTkButton(
+            self,
+            text="Mengerti  (Enter)",
+            height=40,
+            fg_color=COLOR_HIJAU,
+            hover_color="#1e7e34",
+            command=self.destroy,
+        )
+        btn.pack(pady=12)
+        self.bind("<Return>", lambda e: self.destroy())
+        self.after(120, btn.focus_set)
+
+
 class RejectDialog(ctk.CTkToplevel):
     def __init__(self, parent, on_submit):
         super().__init__(parent)
