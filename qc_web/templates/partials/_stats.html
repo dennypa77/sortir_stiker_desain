@@ -1,0 +1,9 @@
+{% if refresh_msg %}<div class="refresh-msg">{{ refresh_msg }}</div>{% endif %}
+<div class="stats-grid">
+  <div class="stat"><span class="stat-num">{{ total }}</span><span class="stat-lbl">resi termuat</span></div>
+  <div class="stat"><span class="stat-num">{{ pending }}</span><span class="stat-lbl">pending QC</span></div>
+  <div class="stat"><span class="stat-num">{{ stats.processed }}</span><span class="stat-lbl">diproses hari ini</span></div>
+  <div class="stat ok"><span class="stat-num">{{ stats.approved }}</span><span class="stat-lbl">approved</span></div>
+  <div class="stat bad"><span class="stat-num">{{ stats.rejected }}</span><span class="stat-lbl">rejected</span></div>
+  <div class="stat"><span class="stat-num">{{ '%.1f'|format(stats.pass_rate) }}%</span><span class="stat-lbl">pass rate</span></div>
+</div>

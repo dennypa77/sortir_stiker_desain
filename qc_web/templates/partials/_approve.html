@@ -1,0 +1,25 @@
+{% set rc = resi_code if resi_code is defined else '' %}
+<button type="button" id="approve-open" class="btn btn-green btn-block btn-lg"
+        onclick="openApprove()" {% if not complete %}disabled{% endif %}>
+  ✓ APPROVE &amp; SEAL
+</button>
+{% if complete %}
+  <p id="approve-hint" class="ready-hint">
+    ✔ Semua terverifikasi — tekan <kbd>Enter</kbd> atau <kbd>+</kbd> untuk APPROVE &amp; SEAL
+  </p>
+{% endif %}
+
+<!-- Panel konfirmasi (keyboard-friendly, pengganti confirm() bawaan) -->
+<div class="modal-overlay" id="approve-confirm">
+  <div class="modal">
+    <h3>Seal polymailer resi {{ rc }}?</h3>
+    <p class="muted">Tekan <kbd>Enter</kbd> / <kbd>+</kbd> untuk konfirmasi, <kbd>Esc</kbd> untuk batal.</p>
+    <form hx-post="{{ url_for('approve', sid=session_id) }}" hx-target="#app" hx-swap="innerHTML">
+      <input type="hidden" name="resi" value="{{ rc }}">
+      <div class="modal-actions">
+        <button type="button" class="btn btn-grey" onclick="closeApprove()">Batal (Esc)</button>
+        <button type="submit" id="approve-yes" class="btn btn-green">YA, SEAL (Enter)</button>
+      </div>
+    </form>
+  </div>
+</div>

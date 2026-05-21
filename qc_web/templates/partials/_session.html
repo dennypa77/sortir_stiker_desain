@@ -1,0 +1,72 @@
+<section class="session">
+  <div class="resi-info">
+    <div class="resi-code">Resi: <strong>{{ resi_code }}</strong></div>
+    <div class="resi-meta">Marketplace: {{ marketplace }} &nbsp;•&nbsp; Batch: {{ batch_id }}</div>
+  </div>
+
+  <div class="session-grid">
+    <!-- Kiri: checklist -->
+    <div class="checklist-pane">
+      <h3>Checklist Item Pesanan</h3>
+      <div id="checklist" class="qc-grid">
+        {% include "partials/_checklist.html" %}
+      </div>
+    </div>
+
+    <!-- Kanan: scan + tombol -->
+    <aside class="scan-pane">
+      <h3>Scan Pack Stiker</h3>
+      <form hx-post="{{ url_for('pack_scan', sid=session_id) }}"
+            hx-target="#last-scan" hx-swap="innerHTML"
+            hx-on::after-request="this.barcode.value=''; this.barcode.focus()">
+        <input type="text" name="barcode" class="scan-input"
+               placeholder="Scan / ketik SKU lalu Enter..." autocomplete="off"
+               data-autofocus>
+        <p class="hint">Barcode rusak? Ketik SKU / ID desain manual lalu Enter.</p>
+      </form>
+
+      <div id="last-scan" class="last-scan last-scan-{{ last_kind }}">
+        {% if last_scan %}{{ last_scan }}{% else %}Belum ada scan.{% endif %}
+      </div>
+
+      <div id="approve-area">
+        {% include "partials/_approve.html" %}
+      </div>
+
+      <button type="button" class="btn btn-red btn-block"
+              onclick="document.getElementById('reject-modal').classList.add('show')">
+        ✗ REJECT
+      </button>
+
+      <form hx-post="{{ url_for('cancel', sid=session_id) }}" hx-target="#app"
+            hx-swap="innerHTML"
+            hx-confirm="Sesi QC akan disimpan sebagai 'in_progress' dan bisa dilanjutkan nanti. Kembali ke idle?">
+        <input type="hidden" name="resi" value="{{ resi_code }}">
+        <button type="submit" class="btn btn-grey btn-block">← Batalkan, Kembali</button>
+      </form>
+    </aside>
+  </div>
+
+  <!-- Modal reject -->
+  <div class="modal-overlay" id="reject-modal">
+    <div class="modal">
+      <h3>Reject Resi {{ resi_code }}</h3>
+      <form hx-post="{{ url_for('reject', sid=session_id) }}" hx-target="#app"
+            hx-swap="innerHTML"
+            hx-on::after-request="document.getElementById('reject-modal').classList.remove('show')">
+        <input type="hidden" name="resi" value="{{ resi_code }}">
+        <label>Alasan reject</label>
+        <select name="reason" class="select">
+          {% for r in reject_reasons %}<option value="{{ r }}">{{ r }}</option>{% endfor %}
+        </select>
+        <label>Catatan tambahan (opsional)</label>
+        <textarea name="notes" rows="3" class="textarea"></textarea>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-grey"
+                  onclick="document.getElementById('reject-modal').classList.remove('show')">Batal</button>
+          <button type="submit" class="btn btn-red">Submit Reject</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</section>

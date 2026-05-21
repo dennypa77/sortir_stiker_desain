@@ -1,0 +1,25 @@
+{% for item in items %}
+  <div class="qc-card qc-{{ item.view.state }}">
+    <div class="qc-card-top">
+      <span class="qc-icon">{{ item.view.icon }}</span>
+      <span class="qc-id">
+        {%- if item.is_non_stiker %}{{ item.bigseller_sku }}{% else %}ID {{ item.design_sku }}{% endif -%}
+      </span>
+    </div>
+    {% if not item.is_non_stiker %}
+      <div class="qc-sku">{{ item.bigseller_sku }}</div>
+    {% endif %}
+    <div class="qc-status">{{ item.view.title }}</div>
+    <div class="qc-detail">{{ item.view.detail }}</div>
+    {% if item.view.shortfall %}
+      <div class="qc-shortfall">{{ item.view.shortfall }}</div>
+    {% endif %}
+    {% if item.is_non_stiker and not item.is_visual_confirmed %}
+      <button type="button" class="btn btn-yellow btn-sm"
+              hx-post="{{ url_for('visual_confirm', sid=session_id, pid=item.id) }}"
+              hx-target="#last-scan" hx-swap="innerHTML">
+        Visual Confirm
+      </button>
+    {% endif %}
+  </div>
+{% endfor %}

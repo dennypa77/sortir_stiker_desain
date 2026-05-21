@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="id">
+<head>
+    <meta charset="utf-8">
+    <title>{% block title %}Stasiun QC{% endblock %} · HOG Stiker</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="topbar">
+    <div class="brand">
+        <span class="brand-mark">✅</span>
+        <div>
+            <h1>STASIUN QC HOG</h1>
+            <small>v{{ qc_version }} · Quality Gate</small>
+        </div>
+    </div>
+    <div class="topbar-right">
+        <span class="clock" id="clock">--:--</span>
+    </div>
+</header>
+
+<main id="app">
+    {% block content %}{% endblock %}
+</main>
+
+<!-- Overlay loading untuk operasi yang kirim/baca ke Google Sheet -->
+<div id="loading-overlay" class="loading-overlay">
+  <div class="loading-box">
+    <div class="spinner"></div>
+    <div id="loading-text">Memproses...</div>
+    <div class="loading-sub">Mohon tunggu, jangan tutup halaman.</div>
+  </div>
+</div>
+
+<script>
+  // ---- Web Audio beep (pengganti winsound) ----
+  let _actx = null;
+  function _ctx() {
+    if (!_actx) {
+      try { _actx = new (window.AudioContext || window.webkitAudioContext)(); }
+      catch (e) { return null; }
+    }
+    if (_actx.state === 'suspended') _actx.resume();
+    return _actx;
+  }
+  function beep(freq, ms, when) {
+    const ctx = _ctx(); if (!ctx) return;
+    const t0 = ctx.currentTime + (when || 0);
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'square';
+    osc.frequency.value = freq;
+    gain.gain.value = 0.12;
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + ms / 1000);
+  }
+  // Unlock audio pada interaksi pertama (kebijakan autoplay browser)
+  ['click', 'keydown'].forEach(function (ev) {
+    window.addEventListener(ev, function () { _ctx(); }, { once: true });
+  });
+
+  // ---- TTS browser (pengganti gTTS/pygame) ----
+  function speak(text) {
+    try {
+      if (!('speechSynthesis' in window) || !text) return;
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'id-ID';
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(u);
+    } catch (e) {}
+  }
+
+  // ---- HX-Trigger event -> suara/TTS ----
+  document.body.addEventListener('playMatch', function () { beep(1500, 150); });
+  document.body.addEventListener('playMismatch', function () { beep(400, 400); });
+  document.body.addEventListener('playSetup', function () { beep(1200, 120); });
+  document.body.addEventListener('playComplete', function () {
+    beep(2000, 120); beep(2400, 180, 0.13);
+  });
+  document.body.addEventListener('qcSpeak', function (e) {
+    const d = e.detail || {};
+    speak(d.text || (typeof d === 'string' ? d : ''));
+  });
+
+  // ---- Auto-focus input scan setelah swap (penting untuk barcode scanner) ----
+  function focusScan() {
+    const el = document.querySelector('[data-autofocus]');
+    if (el) { el.focus(); el.select && el.select(); }
+  }
+  document.body.addEventListener('htmx:afterSwap', focusScan);
+  document.addEventListener('DOMContentLoaded', focusScan);
+
+  // ---- Shortcut keyboard APPROVE & SEAL (hands-free, tanpa mouse) ----
+  // Alur: (complete) Enter pada kolom scan kosong / '+'  -> buka panel konfirmasi;
+  //        Enter / '+' lagi -> seal;  Esc -> batal.  Mouse tetap berfungsi.
+  function _approveModal() { return document.getElementById('approve-confirm'); }
+  function _rejectModal() { return document.getElementById('reject-modal'); }
+  function _approveBtn() { return document.getElementById('approve-open'); }
+  function _approveReady() { const b = _approveBtn(); return b && !b.disabled; }
+  function _modalShown(m) { return m && m.classList.contains('show'); }
+
+  function openApprove() {
+    const m = _approveModal();
+    if (!m || !_approveReady()) return;
+    m.classList.add('show');
+    if (document.activeElement) document.activeElement.blur(); // hindari double-submit
+  }
+  function closeApprove() {
+    const m = _approveModal();
+    if (m) m.classList.remove('show');
+    const s = document.querySelector('input[name=barcode]');
+    if (s) s.focus();
+  }
+  window.openApprove = openApprove;
+  window.closeApprove = closeApprove;
+
+  document.addEventListener('keydown', function (e) {
+    // Modal reject sedang terbuka: Esc menutup, sisanya biarkan (textarea dll).
+    if (_modalShown(_rejectModal())) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        _rejectModal().classList.remove('show');
+      }
+      return;
+    }
+
+    const approveOpen = _modalShown(_approveModal());
+    if (approveOpen) {
+      if (e.key === 'Enter' || e.key === '+') {
+        e.preventDefault();
+        const yes = document.getElementById('approve-yes');
+        if (yes) yes.click();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        closeApprove();
+      }
+      return;
+    }
+
+    // Belum ada panel konfirmasi: butuh sesi complete dulu.
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'textarea' || tag === 'select') return;
+    if (!_approveReady()) return;
+
+    if (e.key === '+') {
+      e.preventDefault();
+      openApprove();
+    } else if (e.key === 'Enter') {
+      // Enter hanya memicu approve kalau kolom scan KOSONG — supaya tidak
+      // bentrok dengan Enter untuk submit scan pack.
+      const s = document.querySelector('input[name=barcode]');
+      if (s && s.value.trim() !== '') return;
+      e.preventDefault();
+      openApprove();
+    }
+  });
+
+  // Setiap swap (mis. scan berikutnya) tutup panel konfirmasi yang mungkin terbuka.
+  document.body.addEventListener('htmx:afterSwap', function () {
+    const m = _approveModal();
+    if (m) m.classList.remove('show');
+  });
+
+  // ---- Overlay loading (hanya untuk operasi yang menyentuh Google Sheet) ----
+  (function () {
+    const ov = document.getElementById('loading-overlay');
+    const txt = document.getElementById('loading-text');
+    function pathOf(e) {
+      try {
+        if (e.detail && e.detail.requestConfig && e.detail.requestConfig.path) {
+          return e.detail.requestConfig.path;
+        }
+      } catch (_) {}
+      const el = e.detail && e.detail.elt;
+      if (el && el.getAttribute) {
+        return el.getAttribute('hx-post') || el.getAttribute('hx-get') || '';
+      }
+      return '';
+    }
+    function msgFor(p) {
+      if (p.indexOf('/approve') >= 0) return 'Menyimpan hasil & seal — mengirim ke Google Sheet…';
+      if (p.indexOf('/reject') >= 0) return 'Menyimpan reject — mengirim ke Google Sheet…';
+      if (p.indexOf('/resi/scan') >= 0) return 'Mencari resi di sheet…';
+      if (p.indexOf('/refresh') >= 0) return 'Memuat ulang data sheet…';
+      return null;  // scan pack / visual confirm / cancel = lokal & cepat, tanpa overlay
+    }
+    document.body.addEventListener('htmx:beforeRequest', function (e) {
+      const m = msgFor(pathOf(e));
+      if (!m) return;
+      txt.textContent = m;
+      ov.classList.add('show');
+    });
+    ['htmx:afterRequest', 'htmx:responseError', 'htmx:sendError', 'htmx:timeout']
+      .forEach(function (ev) {
+        document.body.addEventListener(ev, function () { ov.classList.remove('show'); });
+      });
+  })();
+
+  // ---- Live clock ----
+  (function () {
+    const el = document.getElementById('clock');
+    function tick() {
+      const d = new Date();
+      el.textContent = String(d.getHours()).padStart(2, '0') + ':' +
+                       String(d.getMinutes()).padStart(2, '0');
+    }
+    tick(); setInterval(tick, 30000);
+  })();
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

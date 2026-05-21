@@ -1,0 +1,12 @@
+{# Konten utama -> #last-scan (innerHTML). #}
+<span class="last-scan-msg last-scan-{{ last_kind }}">{{ last_scan }}</span>
+
+{# OOB: refresh checklist #}
+<div id="checklist" class="qc-grid" hx-swap-oob="innerHTML">
+  {% include "partials/_checklist.html" %}
+</div>
+
+{# OOB: refresh tombol approve (enabled/disabled sesuai kelengkapan) #}
+<div id="approve-area" hx-swap-oob="innerHTML">
+  {% include "partials/_approve.html" %}
+</div>

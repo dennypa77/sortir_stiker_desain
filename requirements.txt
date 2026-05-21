@@ -5,3 +5,4 @@ PyPDF2
 openpyxl
 gTTS
 pygame
+flask

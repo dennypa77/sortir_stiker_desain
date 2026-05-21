@@ -1,0 +1,36 @@
+<section class="idle-wrap">
+  {% if conn_error %}
+    <div class="banner banner-error">
+      ⚠ Koneksi Google Sheet gagal: {{ conn_error }}<br>
+      <small>Set ulang via app.py → tab "Koneksi Gudang", lalu restart Stasiun QC web.</small>
+    </div>
+  {% endif %}
+
+  <div class="idle-card">
+    <h2>SCAN BARCODE RESI POLYMAILER</h2>
+    <p class="muted">
+      Polymailer di tangan, belum di-seal. Arahkan scanner ke barcode resi.<br>
+      Setelah resi terbaca, scan tiap pack stiker untuk verifikasi isi sebelum seal.
+    </p>
+
+    <form hx-post="{{ url_for('resi_scan') }}" hx-target="#app" hx-swap="innerHTML"
+          hx-on::after-request="this.resi.value=''">
+      <input type="text" name="resi" class="scan-input scan-input-lg"
+             placeholder="Scan barcode resi disini..." autocomplete="off"
+             data-autofocus>
+    </form>
+
+    {% if status %}
+      <div class="idle-status idle-status-{{ status_kind }}">{{ status }}</div>
+    {% endif %}
+  </div>
+
+  <div id="stats-bar" class="stats-bar">
+    {% include "partials/_stats.html" %}
+  </div>
+
+  <form hx-post="{{ url_for('refresh') }}" hx-target="#stats-bar" hx-swap="innerHTML"
+        class="refresh-form">
+    <button type="submit" class="btn btn-cyan">Refresh Data</button>
+  </form>
+</section>
